@@ -1,9 +1,15 @@
 from contextlib import closing
 from app.database.connection import get_connection
 
-def list_assets():
+def list_assets(project_id: int | None = None):
+    query = "SELECT * FROM assets"
+    params: tuple = ()
+    if project_id is not None:
+        query += " WHERE project_id=?"
+        params = (project_id,)
+    query += " ORDER BY asset_type,name"
     with closing(get_connection()) as conn:
-        rows = conn.execute("SELECT * FROM assets ORDER BY asset_type,name").fetchall()
+        rows = conn.execute(query, params).fetchall()
     return [dict(r) for r in rows]
 
 def get_asset(asset_id: int):
@@ -26,11 +32,14 @@ def create_asset(data: dict):
     data = dict(data)
     data["approved"] = int(data.get("approved", False))
     with closing(get_connection()) as conn:
+        if not conn.execute("SELECT 1 FROM projects WHERE id=?", (data.get("project_id", 1),)).fetchone():
+            raise ValueError("הפרויקט אינו קיים.")
         cur = conn.execute("""
             INSERT INTO assets
             (project_id,asset_type,name,description,visual_rules,master_prompt,negative_prompt,reference_url,approved)
-            VALUES (1,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?)
         """, (
+            data.get("project_id", 1),
             data["asset_type"], data["name"], data.get("description",""),
             data.get("visual_rules",""), data.get("master_prompt",""),
             data.get("negative_prompt",""), data.get("reference_url",""),

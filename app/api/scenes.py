@@ -5,8 +5,8 @@ from app.repositories import scenes as repo
 router = APIRouter(prefix="/api/scenes", tags=["scenes"])
 
 @router.get("")
-def list_scenes():
-    return repo.list_scenes()
+def list_scenes(project_id: int | None = None):
+    return repo.list_scenes(project_id)
 
 @router.post("")
 def create_scene(scene: SceneCreate):

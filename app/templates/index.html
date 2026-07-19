@@ -8,8 +8,13 @@
 </head>
 <body>
 <header>
-  <h1>AI Film OS — כתובת אפס</h1>
+  <h1>AI Film OS</h1>
   <p>Story Bible · Scenes · Shots · Continuity · QA</p>
+  <div class="project-switcher">
+    <label for="projectSelect">הפקה פעילה</label>
+    <select id="projectSelect" onchange="switchProject(this.value)"></select>
+    <button class="secondary" onclick="newProject()">הפקה חדשה</button>
+  </div>
 </header>
 <main>
   <nav>

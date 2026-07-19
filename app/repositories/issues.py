@@ -1,17 +1,23 @@
 from contextlib import closing
 from app.database.connection import get_connection
 
-def list_issues(resolved: bool | None = None):
+def list_issues(resolved: bool | None = None, project_id: int | None = None):
     query = """
         SELECT ci.*, s.shot_number, s.title AS shot_title, a.name AS asset_name
         FROM continuity_issues ci
         LEFT JOIN shots s ON s.id=ci.shot_id
         LEFT JOIN assets a ON a.id=ci.asset_id
     """
+    conditions = []
     params = []
     if resolved is not None:
-        query += " WHERE ci.resolved=?"
+        conditions.append("ci.resolved=?")
         params.append(int(resolved))
+    if project_id is not None:
+        conditions.append("ci.project_id=?")
+        params.append(project_id)
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
     query += """
         ORDER BY
           CASE ci.severity

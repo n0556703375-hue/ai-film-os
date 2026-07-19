@@ -9,8 +9,8 @@ from app.services.director import run_director
 router = APIRouter(prefix="/api/shots", tags=["shots"])
 
 @router.get("")
-def list_shots():
-    return repo.list_shots()
+def list_shots(project_id: int | None = None):
+    return repo.list_shots(project_id)
 
 @router.post("")
 def create_shot(shot: ShotCreate):

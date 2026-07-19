@@ -5,8 +5,22 @@ const esc = (value) =>
     '"': "&quot;", "'": "&#39;"
   })[char]);
 
+let currentProjectId = Number(localStorage.getItem("filmOsProjectId")) || null;
+const PROJECT_SCOPED_BASES = ["/api/scenes", "/api/shots", "/api/assets", "/api/issues", "/api/dashboard"];
+
+function withProject(url) {
+  if (!currentProjectId) return url;
+  const scoped = PROJECT_SCOPED_BASES.some(
+    (base) => url === base || url.startsWith(base + "?") || url.startsWith(base + "/")
+  );
+  if (!scoped) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}project_id=${currentProjectId}`;
+}
+
 async function api(url, options = {}) {
-  const response = await fetch(url, {
+  const method = (options.method || "GET").toUpperCase();
+  const finalUrl = method === "GET" ? withProject(url) : url;
+  const response = await fetch(finalUrl, {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
@@ -15,12 +29,55 @@ async function api(url, options = {}) {
   return data;
 }
 
+async function loadProjects() {
+  const projects = await api("/api/projects");
+  if (!projects.length) return;
+  if (!currentProjectId || !projects.some((p) => p.id === currentProjectId)) {
+    currentProjectId = projects[0].id;
+    localStorage.setItem("filmOsProjectId", currentProjectId);
+  }
+  $("projectSelect").innerHTML = projects
+    .map((p) => `<option value="${p.id}" ${p.id === currentProjectId ? "selected" : ""}>${esc(p.name)}</option>`)
+    .join("");
+}
+
+async function switchProject(id) {
+  currentProjectId = Number(id);
+  localStorage.setItem("filmOsProjectId", currentProjectId);
+  const loader = loaders[currentTab];
+  if (loader) await loader().catch(showError);
+}
+
+function newProject() {
+  show(`<h2>הפקה חדשה</h2><div class="form-grid">
+    <div class="wide"><label>שם ההפקה</label><input id="npName"></div>
+    <div class="wide"><label>תיאור</label><textarea id="npDescription"></textarea></div>
+    <div class="wide"><label>סגנון חזותי</label><textarea id="npStyle"></textarea></div>
+    <div class="wide"><label>כללים</label><textarea id="npRules"></textarea></div>
+  </div><button onclick="createProject()">יצירת הפקה</button>`);
+}
+
+async function createProject() {
+  const project = await api("/api/projects", {method:"POST", body:JSON.stringify({
+    name:$("npName").value, description:$("npDescription").value,
+    visual_style:$("npStyle").value, rules:$("npRules").value
+  })});
+  currentProjectId = project.id;
+  localStorage.setItem("filmOsProjectId", currentProjectId);
+  closeModal();
+  await loadProjects();
+  await loadDashboard();
+}
+
+let currentTab = "dashboard";
+
 document.querySelectorAll("nav button").forEach((button) => {
   button.addEventListener("click", () => {
     document.querySelectorAll(".panel").forEach((panel) => panel.classList.remove("active"));
     const target = $(button.dataset.tab);
     if (!target) return;
     target.classList.add("active");
+    currentTab = button.dataset.tab;
     const loader = loaders[button.dataset.tab];
     if (loader) loader().catch(showError);
   });
@@ -68,6 +125,7 @@ function newScene() {
 
 async function createScene() {
   const scene = await api("/api/scenes", {method:"POST", body:JSON.stringify({
+    project_id:currentProjectId,
     scene_number:Number($("newSceneNumber").value), title:$("newSceneTitle").value,
     status:$("newSceneStatus").value, story_goal:$("newSceneGoal").value
   })});
@@ -149,6 +207,7 @@ async function newShot(sceneId = null) {
 
 async function createShot() {
   const shot = await api("/api/shots", {method:"POST", body:JSON.stringify({
+    project_id:currentProjectId,
     scene_id:Number($("newShotScene").value), shot_number:Number($("newShotNumber").value),
     title:$("newShotTitle").value
   })});
@@ -299,6 +358,7 @@ function newIssueForShot(shotId) {
 
 async function saveIssue(shotId) {
   await api("/api/issues", {method:"POST", body:JSON.stringify({
+    project_id:currentProjectId,
     shot_id:shotId, category:$("issueCategory").value, severity:$("issueSeverity").value,
     message:$("issueMessage").value, expected:$("issueExpected").value,
     observed:$("issueObserved").value
@@ -375,7 +435,7 @@ function newAsset() {
     <label>קישור לרפרנס</label><input id="asUrl"><button onclick="createAsset()">יצירת נכס</button>`);
 }
 async function createAsset() {
-  const payload={asset_type:$("asType").value,name:$("asName").value,description:$("asDescription").value,
+  const payload={project_id:currentProjectId,asset_type:$("asType").value,name:$("asName").value,description:$("asDescription").value,
   visual_rules:$("asRules").value,master_prompt:$("asMaster").value,negative_prompt:$("asNegative").value,
   reference_url:$("asUrl").value,approved:false};
   const asset=await api("/api/assets",{method:"POST",body:JSON.stringify(payload)});await openAsset(asset.id);
@@ -428,4 +488,11 @@ function closeModal(){$("modal").style.display="none";}
 function showError(error){console.error(error);show(`<h2>שגיאה</h2><p>${esc(error.message)}</p>`);}
 
 const loaders={dashboard:loadDashboard,scenes:loadScenes,shots:loadShots,assets:loadAssets,qa:loadQA};
-loadDashboard().catch(showError);
+(async function init() {
+  try {
+    await loadProjects();
+  } catch (error) {
+    console.error(error);
+  }
+  loadDashboard().catch(showError);
+})();

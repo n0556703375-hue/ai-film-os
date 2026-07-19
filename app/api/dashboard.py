@@ -5,25 +5,36 @@ from app.database.connection import get_connection
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 @router.get("")
-def dashboard():
+def dashboard(project_id: int | None = None):
+    shot_filter = " WHERE project_id=?" if project_id is not None else ""
+    scene_filter = shot_filter
+    asset_filter = shot_filter
+    issue_filter = " WHERE project_id=? AND resolved=0" if project_id is not None else " WHERE resolved=0"
+    critical_filter = (
+        " WHERE project_id=? AND resolved=0 AND severity IN ('critical','high')"
+        if project_id is not None
+        else " WHERE resolved=0 AND severity IN ('critical','high')"
+    )
+    params = (project_id,) if project_id is not None else ()
+
     with closing(get_connection()) as conn:
-        total = conn.execute("SELECT COUNT(*) FROM shots").fetchone()[0]
+        total = conn.execute(f"SELECT COUNT(*) FROM shots{shot_filter}", params).fetchone()[0]
         status_rows = conn.execute(
-            "SELECT status,COUNT(*) AS count FROM shots GROUP BY status"
+            f"SELECT status,COUNT(*) AS count FROM shots{shot_filter} GROUP BY status", params
         ).fetchall()
         statuses = {row["status"]: row["count"] for row in status_rows}
-        assets = conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0]
+        assets = conn.execute(f"SELECT COUNT(*) FROM assets{asset_filter}", params).fetchone()[0]
         approved_assets = conn.execute(
-            "SELECT COUNT(*) FROM assets WHERE approved=1"
+            f"SELECT COUNT(*) FROM assets{asset_filter}{' AND' if asset_filter else ' WHERE'} approved=1",
+            params
         ).fetchone()[0]
-        scenes = conn.execute("SELECT COUNT(*) FROM scenes").fetchone()[0]
+        scenes = conn.execute(f"SELECT COUNT(*) FROM scenes{scene_filter}", params).fetchone()[0]
         issues = conn.execute(
-            "SELECT COUNT(*) FROM continuity_issues WHERE resolved=0"
+            f"SELECT COUNT(*) FROM continuity_issues{issue_filter}", params
         ).fetchone()[0]
-        critical = conn.execute("""
-            SELECT COUNT(*) FROM continuity_issues
-            WHERE resolved=0 AND severity IN ('critical','high')
-        """).fetchone()[0]
+        critical = conn.execute(
+            f"SELECT COUNT(*) FROM continuity_issues{critical_filter}", params
+        ).fetchone()[0]
 
     completed = statuses.get("סופי", 0)
     progress = round((completed / total) * 100) if total else 0

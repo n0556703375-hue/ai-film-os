@@ -2,16 +2,21 @@ import json
 from contextlib import closing
 from app.database.connection import get_connection
 
-def list_shots():
+def list_shots(project_id: int | None = None):
+    query = """
+        SELECT s.*,
+          (SELECT COUNT(*) FROM shot_assets sa WHERE sa.shot_id=s.id) AS asset_count,
+          sc.scene_number
+        FROM shots s
+        LEFT JOIN scenes sc ON sc.id=s.scene_id
+    """
+    params: tuple = ()
+    if project_id is not None:
+        query += " WHERE s.project_id=?"
+        params = (project_id,)
+    query += " ORDER BY s.shot_number"
     with closing(get_connection()) as conn:
-        rows = conn.execute("""
-            SELECT s.*,
-              (SELECT COUNT(*) FROM shot_assets sa WHERE sa.shot_id=s.id) AS asset_count,
-              sc.scene_number
-            FROM shots s
-            LEFT JOIN scenes sc ON sc.id=s.scene_id
-            ORDER BY s.shot_number
-        """).fetchall()
+        rows = conn.execute(query, params).fetchall()
     return [dict(r) for r in rows]
 
 def _load_assets(conn, shot_id: int):

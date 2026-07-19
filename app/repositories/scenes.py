@@ -1,14 +1,20 @@
 from contextlib import closing
 from app.database.connection import get_connection
 
-def list_scenes():
+def list_scenes(project_id: int | None = None):
+    query = """
+        SELECT sc.*,
+          (SELECT COUNT(*) FROM shots s WHERE s.scene_id=sc.id) AS shot_count,
+          (SELECT COALESCE(SUM(duration_seconds),0) FROM shots s WHERE s.scene_id=sc.id) AS duration_seconds
+        FROM scenes sc
+    """
+    params: tuple = ()
+    if project_id is not None:
+        query += " WHERE sc.project_id=?"
+        params = (project_id,)
+    query += " ORDER BY scene_number"
     with closing(get_connection()) as conn:
-        rows = conn.execute("""
-            SELECT sc.*,
-              (SELECT COUNT(*) FROM shots s WHERE s.scene_id=sc.id) AS shot_count,
-              (SELECT COALESCE(SUM(duration_seconds),0) FROM shots s WHERE s.scene_id=sc.id) AS duration_seconds
-            FROM scenes sc ORDER BY scene_number
-        """).fetchall()
+        rows = conn.execute(query, params).fetchall()
     return [dict(r) for r in rows]
 
 def get_scene(scene_id: int):

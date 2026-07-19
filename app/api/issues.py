@@ -5,8 +5,8 @@ from app.repositories import issues as repo
 router = APIRouter(prefix="/api/issues", tags=["issues"])
 
 @router.get("")
-def list_issues(resolved: bool | None = None):
-    return repo.list_issues(resolved)
+def list_issues(resolved: bool | None = None, project_id: int | None = None):
+    return repo.list_issues(resolved, project_id)
 
 @router.post("")
 def create_issue(issue: ContinuityIssueCreate):

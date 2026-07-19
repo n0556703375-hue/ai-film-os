@@ -5,8 +5,8 @@ from app.repositories import assets as repo
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 
 @router.get("")
-def list_assets():
-    return repo.list_assets()
+def list_assets(project_id: int | None = None):
+    return repo.list_assets(project_id)
 
 @router.get("/{asset_id}")
 def get_asset(asset_id: int):
@@ -17,7 +17,10 @@ def get_asset(asset_id: int):
 
 @router.post("")
 def create_asset(asset: AssetCreate):
-    return repo.create_asset(asset.model_dump())
+    try:
+        return repo.create_asset(asset.model_dump())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 @router.patch("/{asset_id}")
 def update_asset(asset_id: int, update: AssetUpdate):

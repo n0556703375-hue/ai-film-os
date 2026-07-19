@@ -13,6 +13,18 @@ ShotType = Literal[
 
 AssetType = Literal["דמות", "לוקיישן", "אביזר", "לבוש", "כלל", "סגנון"]
 
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=300)
+    description: str = Field(default="", max_length=10000)
+    visual_style: str = Field(default="", max_length=10000)
+    rules: str = Field(default="", max_length=10000)
+
+class ProjectUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=300)
+    description: str | None = Field(None, max_length=10000)
+    visual_style: str | None = Field(None, max_length=10000)
+    rules: str | None = Field(None, max_length=10000)
+
 class ShotUpdate(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=300)
     scene_id: int | None = None
@@ -42,6 +54,7 @@ class ShotCreate(ShotUpdate):
     title: str = Field(min_length=1, max_length=300)
 
 class AssetCreate(BaseModel):
+    project_id: int = Field(default=1, ge=1)
     asset_type: AssetType
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=10000)
