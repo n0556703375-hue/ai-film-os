@@ -11,6 +11,7 @@ from app.services.generation import (
     submit_magnific_image,
     build_character_reference_prompt,
     submit_magnific_reference,
+    validate_generated_image,
 )
 
 router = APIRouter(prefix="/api/generation", tags=["generation"])
@@ -56,6 +57,7 @@ def asset_reference_task(asset_id: int, task_id: str, view_type: str = "portrait
             raise HTTPException(422, "Magnific חסם את התוצאה בבדיקת התוכן.")
         if not task.get("generated"):
             raise HTTPException(502, "המשימה הושלמה ללא תמונה.")
+        validate_generated_image(task["generated"][0])
         existing = next((r for r in asset.get("reference_images", [])
                          if r.get("metadata", {}).get("magnific_task_id") == task_id), None)
         reference = existing or asset_repo.create_reference_image(asset_id, {
