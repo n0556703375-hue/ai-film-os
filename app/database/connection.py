@@ -58,6 +58,21 @@ def migrate_database(conn: sqlite3.Connection) -> None:
         "actual_cost_usd": "REAL NOT NULL DEFAULT 0",
     })
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS scene_asset_variants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scene_id INTEGER NOT NULL,
+            asset_id INTEGER NOT NULL,
+            state_name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            reference_url TEXT NOT NULL DEFAULT '',
+            visual_rules TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(scene_id, asset_id),
+            FOREIGN KEY(scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
+            FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+        )
+    """)
+    conn.execute("""
         UPDATE continuity_issues
         SET status=CASE WHEN resolved=1 THEN 'נפתר' ELSE 'פתוח' END
         WHERE status='' OR status IS NULL
