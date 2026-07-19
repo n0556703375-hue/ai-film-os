@@ -1,15 +1,19 @@
+import hashlib
+import json
+
 from fastapi import APIRouter, HTTPException
 
 from app.models.schemas import CharacterReferenceRequest, GenerationRequest
-from app.repositories import shots as repo
 from app.repositories import assets as asset_repo
+from app.repositories import jobs as job_repo
+from app.repositories import shots as repo
 from app.services.generation import (
     GenerationNotConfigured,
+    build_character_reference_prompt,
     get_magnific_image,
     integration_status,
     refine_prompt,
     submit_magnific_image,
-    build_character_reference_prompt,
     submit_magnific_reference,
     validate_generated_image,
 )
@@ -37,6 +41,22 @@ def _validate_locked_assets(shot: dict) -> None:
             409,
             "לא ניתן ליצור שוט לפני נעילת כל נכסי ההפקה: " + ", ".join(unlocked),
         )
+
+
+def _image_job_key(shot: dict, request: GenerationRequest, prompt_version_id: int | None) -> str:
+    identity = {
+        "shot_id": shot["id"],
+        "prompt_version_id": prompt_version_id,
+        "prompt": shot.get("prompt", ""),
+        "negative_prompt": shot.get("negative_prompt", ""),
+        "instructions": request.instructions,
+        "size": request.size,
+        "quality": request.quality,
+    }
+    digest = hashlib.sha256(
+        json.dumps(identity, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:24]
+    return f"shot:{shot['id']}:image:{digest}"
 
 
 @router.get("/status")
@@ -95,6 +115,37 @@ def asset_reference_task(asset_id: int, task_id: str, view_type: str = "portrait
         raise
     except Exception as exc:
         raise HTTPException(502, f"בדיקת רפרנס הנכס נכשלה: {exc}")
+
+
+@router.post("/shots/{shot_id}/queue")
+def queue_for_shot(shot_id: int, request: GenerationRequest):
+    if request.media_type != "image":
+        raise HTTPException(400, "תור המדיה תומך כרגע ביצירת תמונה בלבד.")
+    shot = repo.get_shot(shot_id)
+    if not shot:
+        raise HTTPException(404, "השוט לא נמצא.")
+    _validate_locked_assets(shot)
+    if not shot.get("prompt"):
+        raise HTTPException(400, "יש לבנות או לשפר פרומפט לפני יצירת תמונה.")
+
+    versions = repo.list_prompt_versions(shot_id)
+    prompt_version_id = versions[0]["id"] if versions else None
+    payload = {
+        "instructions": request.instructions,
+        "aspect_ratio": ASPECT_RATIOS[request.size],
+        "prompt_version_id": prompt_version_id,
+        "size": request.size,
+        "quality": request.quality,
+    }
+    job, created = job_repo.enqueue_job(
+        shot["project_id"],
+        shot_id,
+        "image",
+        payload,
+        _image_job_key(shot, request, prompt_version_id),
+        max_attempts=3,
+    )
+    return {"created": created, "media_type": "image", "job": job}
 
 
 @router.post("/shots/{shot_id}")
