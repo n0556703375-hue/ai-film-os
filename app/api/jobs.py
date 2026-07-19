@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Any, Literal
 
@@ -33,7 +33,7 @@ def list_jobs(project_id: int | None = None, shot_id: int | None = None):
 
 
 @router.get("/cost-summary")
-def cost_summary(project_id: int = Field(ge=1)):
+def cost_summary(project_id: int = Query(ge=1)):
     return repo.get_cost_summary(project_id)
 
 
