@@ -19,4 +19,24 @@ jobs:
       - name: Compile application
         run: python -m compileall -q app
       - name: Run tests
-        run: python -m unittest discover -s tests -v
+        id: tests
+        shell: bash
+        continue-on-error: true
+        run: |
+          python -m unittest discover -s tests -v > test-output.log 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+      - name: Upload test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: test-output.log
+          if-no-files-found: error
+      - name: Fail when tests fail
+        if: steps.tests.outputs.exit_code != '0'
+        run: |
+          tail -n 100 test-output.log
+          exit 1
+      - name: Print passing test output
+        if: steps.tests.outputs.exit_code == '0'
+        run: cat test-output.log
