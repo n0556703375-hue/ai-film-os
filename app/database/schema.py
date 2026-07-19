@@ -68,6 +68,19 @@ CREATE TABLE IF NOT EXISTS shot_assets (
     FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS asset_reference_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL,
+    view_type TEXT NOT NULL,
+    url TEXT NOT NULL,
+    prompt TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL DEFAULT 'Magnific',
+    model TEXT NOT NULL DEFAULT 'Nano Banana Pro',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS continuity_issues (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL,

@@ -1,13 +1,16 @@
 from fastapi import APIRouter, HTTPException
 
-from app.models.schemas import GenerationRequest
+from app.models.schemas import CharacterReferenceRequest, GenerationRequest
 from app.repositories import shots as repo
+from app.repositories import assets as asset_repo
 from app.services.generation import (
     GenerationNotConfigured,
     get_magnific_image,
     integration_status,
     refine_prompt,
     submit_magnific_image,
+    build_character_reference_prompt,
+    submit_magnific_reference,
 )
 
 router = APIRouter(prefix="/api/generation", tags=["generation"])
@@ -22,6 +25,50 @@ ASPECT_RATIOS = {
 @router.get("/status")
 def status():
     return integration_status()
+
+@router.post("/assets/{asset_id}/references")
+def generate_asset_reference(asset_id: int, request: CharacterReferenceRequest):
+    asset = asset_repo.get_asset(asset_id)
+    if not asset:
+        raise HTTPException(404, "הדמות לא נמצאה.")
+    if asset["asset_type"] != "דמות":
+        raise HTTPException(400, "יצירת רפרנס זו זמינה כרגע לנכסים מסוג דמות.")
+    try:
+        prompt = build_character_reference_prompt(asset, request.view_type, request.instructions)
+        existing = [item["url"] for item in asset.get("reference_images", [])]
+        task = submit_magnific_reference(prompt, existing[:1])
+        return {**task, "asset_id": asset_id, "view_type": request.view_type}
+    except GenerationNotConfigured as exc:
+        raise HTTPException(503, str(exc))
+    except Exception as exc:
+        raise HTTPException(502, f"יצירת רפרנס הדמות נכשלה: {exc}")
+
+@router.get("/assets/{asset_id}/references/{task_id}")
+def asset_reference_task(asset_id: int, task_id: str, view_type: str = "portrait", prompt: str = ""):
+    asset = asset_repo.get_asset(asset_id)
+    if not asset:
+        raise HTTPException(404, "הדמות לא נמצאה.")
+    try:
+        task = get_magnific_image(task_id)
+        if task["status"] != "COMPLETED":
+            return {"status": task["status"], "task_id": task_id}
+        if any(task.get("has_nsfw", [])):
+            raise HTTPException(422, "Magnific חסם את התוצאה בבדיקת התוכן.")
+        if not task.get("generated"):
+            raise HTTPException(502, "המשימה הושלמה ללא תמונה.")
+        existing = next((r for r in asset.get("reference_images", [])
+                         if r.get("metadata", {}).get("magnific_task_id") == task_id), None)
+        reference = existing or asset_repo.create_reference_image(asset_id, {
+            "view_type": view_type, "url": task["generated"][0], "prompt": prompt,
+            "metadata": {"magnific_task_id": task_id},
+        })
+        return {"status": "COMPLETED", "task_id": task_id, "reference": reference}
+    except GenerationNotConfigured as exc:
+        raise HTTPException(503, str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, f"בדיקת רפרנס הדמות נכשלה: {exc}")
 
 
 @router.post("/shots/{shot_id}")

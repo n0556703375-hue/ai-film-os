@@ -1,4 +1,5 @@
 from contextlib import closing
+import json
 from app.database.connection import get_connection
 
 def list_assets(project_id: int | None = None):
@@ -24,9 +25,33 @@ def get_asset(asset_id: int):
             WHERE sa.asset_id=?
             ORDER BY s.shot_number
         """, (asset_id,)).fetchall()
+        references = conn.execute("""
+            SELECT * FROM asset_reference_images WHERE asset_id=?
+            ORDER BY created_at DESC,id DESC
+        """, (asset_id,)).fetchall()
     result = dict(asset)
     result["linked_shots"] = [dict(s) for s in shots]
+    result["reference_images"] = [
+        {**dict(r), "metadata": json.loads(r["metadata_json"] or "{}")} for r in references
+    ]
     return result
+
+def create_reference_image(asset_id: int, data: dict):
+    with closing(get_connection()) as conn:
+        if not conn.execute("SELECT 1 FROM assets WHERE id=?", (asset_id,)).fetchone():
+            return None
+        cur = conn.execute("""
+            INSERT INTO asset_reference_images
+            (asset_id,view_type,url,prompt,provider,model,metadata_json)
+            VALUES (?,?,?,?,?,?,?)
+        """, (asset_id, data["view_type"], data["url"], data.get("prompt", ""),
+              data.get("provider", "Magnific"), data.get("model", "Nano Banana Pro"),
+              json.dumps(data.get("metadata", {}), ensure_ascii=False)))
+        conn.execute("UPDATE assets SET reference_url=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                     (data["url"], asset_id))
+        conn.commit()
+        row = conn.execute("SELECT * FROM asset_reference_images WHERE id=?", (cur.lastrowid,)).fetchone()
+    return {**dict(row), "metadata": json.loads(row["metadata_json"] or "{}")}
 
 def create_asset(data: dict):
     data = dict(data)

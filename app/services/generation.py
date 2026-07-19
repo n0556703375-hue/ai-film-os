@@ -78,6 +78,47 @@ ADDITIONAL DIRECTION:
         raise RuntimeError("OpenAI החזיר פרומפט ריק.")
     return result
 
+def build_character_reference_prompt(asset: dict, view_type: str, instructions: str = "") -> str:
+    views = {
+        "portrait": "clean head-and-shoulders identity portrait, eye-level camera",
+        "full_body": "full-body character identity reference, entire figure visible, neutral standing pose",
+        "three_quarter": "three-quarter body identity reference, slight 30-degree turn",
+    }
+    request = f"""Create one precise English image prompt for a film character reference.
+The output is an identity reference, not a story scene. Use a simple neutral studio background,
+even realistic lighting, natural proportions, no text, no collage and no additional people.
+View: {views[view_type]}.
+Character name: {asset['name']}
+Description: {asset.get('description', '')}
+Visual continuity rules: {asset.get('visual_rules', '')}
+Master prompt: {asset.get('master_prompt', '')}
+Additional direction: {instructions or 'None'}
+Return only the final English prompt."""
+    response = _openai_client().responses.create(model=settings.openai_text_model, input=request)
+    result = (response.output_text or "").strip()
+    if not result:
+        raise RuntimeError("OpenAI החזיר פרומפט דמות ריק.")
+    return result
+
+def submit_magnific_reference(prompt: str, reference_images: list[str] | None = None) -> dict:
+    payload = {
+        "prompt": prompt,
+        "resolution": settings.magnific_resolution,
+        "aspect_ratio": "3:4",
+        "reference_images": (reference_images or [])[:14],
+    }
+    with httpx.Client(timeout=45.0) as client:
+        response = client.post(
+            f"{settings.magnific_api_base}/v1/ai/text-to-image/nano-banana-pro",
+            headers=_magnific_headers(), json=payload,
+        )
+    response.raise_for_status()
+    data = response.json().get("data", {})
+    if not data.get("task_id"):
+        raise RuntimeError("Magnific לא החזיר מזהה משימה.")
+    return {"task_id": data["task_id"], "status": data.get("status", "IN_PROGRESS"),
+            "prompt": prompt, "provider": "Magnific", "model": "Nano Banana Pro"}
+
 
 def submit_magnific_image(
     shot: dict,
@@ -91,9 +132,11 @@ def submit_magnific_image(
 
     reference_images = []
     for asset in shot.get("assets", []):
-        url = (asset.get("reference_url") or "").strip()
-        if url and url not in reference_images:
-            reference_images.append(url)
+        urls = asset.get("reference_images") or [asset.get("reference_url", "")]
+        for candidate in urls:
+            url = (candidate or "").strip()
+            if url and url not in reference_images:
+                reference_images.append(url)
     payload = {
         "prompt": prompt,
         "resolution": settings.magnific_resolution,

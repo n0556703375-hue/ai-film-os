@@ -50,4 +50,5 @@ a{color:#9de8ff}
 .pipeline{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-top:15px}
 .pipeline-step{background:#101e29;border:1px solid #294352;border-radius:12px;padding:12px;text-align:center}
 .pipeline-step strong{display:block;font-size:24px;color:#bceeff}
+.reference-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:14px}
 @media(max-width:800px){.workspace-grid,.form-grid{grid-template-columns:1fr}.form-grid .wide{grid-column:auto}.row{flex-direction:column}main{padding:14px}.modal{padding:8px}.dialog{padding:14px}}
