@@ -1,0 +1,547 @@
+diff --git a/app/api/assets.py b/app/api/assets.py
+index 17aafe3..aa0f857 100644
+--- a/app/api/assets.py
++++ b/app/api/assets.py
+@@ -5,8 +5,8 @@ from app.repositories import assets as repo
+ router = APIRouter(prefix="/api/assets", tags=["assets"])
+ 
+ @router.get("")
+-def list_assets():
+-    return repo.list_assets()
++def list_assets(project_id: int | None = None):
++    return repo.list_assets(project_id)
+ 
+ @router.get("/{asset_id}")
+ def get_asset(asset_id: int):
+@@ -17,7 +17,10 @@ def get_asset(asset_id: int):
+ 
+ @router.post("")
+ def create_asset(asset: AssetCreate):
+-    return repo.create_asset(asset.model_dump())
++    try:
++        return repo.create_asset(asset.model_dump())
++    except ValueError as exc:
++        raise HTTPException(400, str(exc))
+ 
+ @router.patch("/{asset_id}")
+ def update_asset(asset_id: int, update: AssetUpdate):
+diff --git a/app/api/dashboard.py b/app/api/dashboard.py
+index 73127a1..e677d0f 100644
+--- a/app/api/dashboard.py
++++ b/app/api/dashboard.py
+@@ -5,25 +5,36 @@ from app.database.connection import get_connection
+ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+ 
+ @router.get("")
+-def dashboard():
++def dashboard(project_id: int | None = None):
++    shot_filter = " WHERE project_id=?" if project_id is not None else ""
++    scene_filter = shot_filter
++    asset_filter = shot_filter
++    issue_filter = " WHERE project_id=? AND resolved=0" if project_id is not None else " WHERE resolved=0"
++    critical_filter = (
++        " WHERE project_id=? AND resolved=0 AND severity IN ('critical','high')"
++        if project_id is not None
++        else " WHERE resolved=0 AND severity IN ('critical','high')"
++    )
++    params = (project_id,) if project_id is not None else ()
++
+     with closing(get_connection()) as conn:
+-        total = conn.execute("SELECT COUNT(*) FROM shots").fetchone()[0]
++        total = conn.execute(f"SELECT COUNT(*) FROM shots{shot_filter}", params).fetchone()[0]
+         status_rows = conn.execute(
+-            "SELECT status,COUNT(*) AS count FROM shots GROUP BY status"
++            f"SELECT status,COUNT(*) AS count FROM shots{shot_filter} GROUP BY status", params
+         ).fetchall()
+         statuses = {row["status"]: row["count"] for row in status_rows}
+-        assets = conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0]
++        assets = conn.execute(f"SELECT COUNT(*) FROM assets{asset_filter}", params).fetchone()[0]
+         approved_assets = conn.execute(
+-            "SELECT COUNT(*) FROM assets WHERE approved=1"
++            f"SELECT COUNT(*) FROM assets{asset_filter}{' AND' if asset_filter else ' WHERE'} approved=1",
++            params
+         ).fetchone()[0]
+-        scenes = conn.execute("SELECT COUNT(*) FROM scenes").fetchone()[0]
++        scenes = conn.execute(f"SELECT COUNT(*) FROM scenes{scene_filter}", params).fetchone()[0]
+         issues = conn.execute(
+-            "SELECT COUNT(*) FROM continuity_issues WHERE resolved=0"
++            f"SELECT COUNT(*) FROM continuity_issues{issue_filter}", params
++        ).fetchone()[0]
++        critical = conn.execute(
++            f"SELECT COUNT(*) FROM continuity_issues{critical_filter}", params
+         ).fetchone()[0]
+-        critical = conn.execute("""
+-            SELECT COUNT(*) FROM continuity_issues
+-            WHERE resolved=0 AND severity IN ('critical','high')
+-        """).fetchone()[0]
+ 
+     completed = statuses.get("סופי", 0)
+     progress = round((completed / total) * 100) if total else 0
+diff --git a/app/api/issues.py b/app/api/issues.py
+index 11ff051..c69e877 100644
+--- a/app/api/issues.py
++++ b/app/api/issues.py
+@@ -5,8 +5,8 @@ from app.repositories import issues as repo
+ router = APIRouter(prefix="/api/issues", tags=["issues"])
+ 
+ @router.get("")
+-def list_issues(resolved: bool | None = None):
+-    return repo.list_issues(resolved)
++def list_issues(resolved: bool | None = None, project_id: int | None = None):
++    return repo.list_issues(resolved, project_id)
+ 
+ @router.post("")
+ def create_issue(issue: ContinuityIssueCreate):
+diff --git a/app/api/scenes.py b/app/api/scenes.py
+index a49065d..d15a072 100644
+--- a/app/api/scenes.py
++++ b/app/api/scenes.py
+@@ -5,8 +5,8 @@ from app.repositories import scenes as repo
+ router = APIRouter(prefix="/api/scenes", tags=["scenes"])
+ 
+ @router.get("")
+-def list_scenes():
+-    return repo.list_scenes()
++def list_scenes(project_id: int | None = None):
++    return repo.list_scenes(project_id)
+ 
+ @router.post("")
+ def create_scene(scene: SceneCreate):
+diff --git a/app/api/shots.py b/app/api/shots.py
+index c003441..3f1c87a 100644
+--- a/app/api/shots.py
++++ b/app/api/shots.py
+@@ -9,8 +9,8 @@ from app.services.director import run_director
+ router = APIRouter(prefix="/api/shots", tags=["shots"])
+ 
+ @router.get("")
+-def list_shots():
+-    return repo.list_shots()
++def list_shots(project_id: int | None = None):
++    return repo.list_shots(project_id)
+ 
+ @router.post("")
+ def create_shot(shot: ShotCreate):
+diff --git a/app/main.py b/app/main.py
+index 7eb7860..633157f 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -6,6 +6,7 @@ from pathlib import Path
+ 
+ from app.database.connection import init_db
+ from app.api.health import router as health_router
++from app.api.projects import router as projects_router
+ from app.api.shots import router as shots_router
+ from app.api.assets import router as assets_router
+ from app.api.scenes import router as scenes_router
+@@ -26,6 +27,7 @@ app = FastAPI(
+ )
+ 
+ app.include_router(health_router)
++app.include_router(projects_router)
+ app.include_router(dashboard_router)
+ app.include_router(shots_router)
+ app.include_router(assets_router)
+diff --git a/app/models/schemas.py b/app/models/schemas.py
+index 03c5328..7ded3d6 100644
+--- a/app/models/schemas.py
++++ b/app/models/schemas.py
+@@ -13,6 +13,18 @@ ShotType = Literal[
+ 
+ AssetType = Literal["דמות", "לוקיישן", "אביזר", "לבוש", "כלל", "סגנון"]
+ 
++class ProjectCreate(BaseModel):
++    name: str = Field(min_length=1, max_length=300)
++    description: str = Field(default="", max_length=10000)
++    visual_style: str = Field(default="", max_length=10000)
++    rules: str = Field(default="", max_length=10000)
++
++class ProjectUpdate(BaseModel):
++    name: str | None = Field(None, min_length=1, max_length=300)
++    description: str | None = Field(None, max_length=10000)
++    visual_style: str | None = Field(None, max_length=10000)
++    rules: str | None = Field(None, max_length=10000)
++
+ class ShotUpdate(BaseModel):
+     title: str | None = Field(None, min_length=1, max_length=300)
+     scene_id: int | None = None
+@@ -42,6 +54,7 @@ class ShotCreate(ShotUpdate):
+     title: str = Field(min_length=1, max_length=300)
+ 
+ class AssetCreate(BaseModel):
++    project_id: int = Field(default=1, ge=1)
+     asset_type: AssetType
+     name: str = Field(min_length=1, max_length=200)
+     description: str = Field(default="", max_length=10000)
+diff --git a/app/repositories/assets.py b/app/repositories/assets.py
+index ffe0283..d313d3a 100644
+--- a/app/repositories/assets.py
++++ b/app/repositories/assets.py
+@@ -1,9 +1,15 @@
+ from contextlib import closing
+ from app.database.connection import get_connection
+ 
+-def list_assets():
++def list_assets(project_id: int | None = None):
++    query = "SELECT * FROM assets"
++    params: tuple = ()
++    if project_id is not None:
++        query += " WHERE project_id=?"
++        params = (project_id,)
++    query += " ORDER BY asset_type,name"
+     with closing(get_connection()) as conn:
+-        rows = conn.execute("SELECT * FROM assets ORDER BY asset_type,name").fetchall()
++        rows = conn.execute(query, params).fetchall()
+     return [dict(r) for r in rows]
+ 
+ def get_asset(asset_id: int):
+@@ -26,11 +32,14 @@ def create_asset(data: dict):
+     data = dict(data)
+     data["approved"] = int(data.get("approved", False))
+     with closing(get_connection()) as conn:
++        if not conn.execute("SELECT 1 FROM projects WHERE id=?", (data.get("project_id", 1),)).fetchone():
++            raise ValueError("הפרויקט אינו קיים.")
+         cur = conn.execute("""
+             INSERT INTO assets
+             (project_id,asset_type,name,description,visual_rules,master_prompt,negative_prompt,reference_url,approved)
+-            VALUES (1,?,?,?,?,?,?,?,?)
++            VALUES (?,?,?,?,?,?,?,?,?)
+         """, (
++            data.get("project_id", 1),
+             data["asset_type"], data["name"], data.get("description",""),
+             data.get("visual_rules",""), data.get("master_prompt",""),
+             data.get("negative_prompt",""), data.get("reference_url",""),
+diff --git a/app/repositories/issues.py b/app/repositories/issues.py
+index 8e63297..ecef2df 100644
+--- a/app/repositories/issues.py
++++ b/app/repositories/issues.py
+@@ -1,17 +1,23 @@
+ from contextlib import closing
+ from app.database.connection import get_connection
+ 
+-def list_issues(resolved: bool | None = None):
++def list_issues(resolved: bool | None = None, project_id: int | None = None):
+     query = """
+         SELECT ci.*, s.shot_number, s.title AS shot_title, a.name AS asset_name
+         FROM continuity_issues ci
+         LEFT JOIN shots s ON s.id=ci.shot_id
+         LEFT JOIN assets a ON a.id=ci.asset_id
+     """
++    conditions = []
+     params = []
+     if resolved is not None:
+-        query += " WHERE ci.resolved=?"
++        conditions.append("ci.resolved=?")
+         params.append(int(resolved))
++    if project_id is not None:
++        conditions.append("ci.project_id=?")
++        params.append(project_id)
++    if conditions:
++        query += " WHERE " + " AND ".join(conditions)
+     query += """
+         ORDER BY
+           CASE ci.severity
+diff --git a/app/repositories/scenes.py b/app/repositories/scenes.py
+index 055b88f..772d59f 100644
+--- a/app/repositories/scenes.py
++++ b/app/repositories/scenes.py
+@@ -1,14 +1,20 @@
+ from contextlib import closing
+ from app.database.connection import get_connection
+ 
+-def list_scenes():
++def list_scenes(project_id: int | None = None):
++    query = """
++        SELECT sc.*,
++          (SELECT COUNT(*) FROM shots s WHERE s.scene_id=sc.id) AS shot_count,
++          (SELECT COALESCE(SUM(duration_seconds),0) FROM shots s WHERE s.scene_id=sc.id) AS duration_seconds
++        FROM scenes sc
++    """
++    params: tuple = ()
++    if project_id is not None:
++        query += " WHERE sc.project_id=?"
++        params = (project_id,)
++    query += " ORDER BY scene_number"
+     with closing(get_connection()) as conn:
+-        rows = conn.execute("""
+-            SELECT sc.*,
+-              (SELECT COUNT(*) FROM shots s WHERE s.scene_id=sc.id) AS shot_count,
+-              (SELECT COALESCE(SUM(duration_seconds),0) FROM shots s WHERE s.scene_id=sc.id) AS duration_seconds
+-            FROM scenes sc ORDER BY scene_number
+-        """).fetchall()
++        rows = conn.execute(query, params).fetchall()
+     return [dict(r) for r in rows]
+ 
+ def get_scene(scene_id: int):
+diff --git a/app/repositories/shots.py b/app/repositories/shots.py
+index e10f453..46d17e8 100644
+--- a/app/repositories/shots.py
++++ b/app/repositories/shots.py
+@@ -2,16 +2,21 @@ import json
+ from contextlib import closing
+ from app.database.connection import get_connection
+ 
+-def list_shots():
++def list_shots(project_id: int | None = None):
++    query = """
++        SELECT s.*,
++          (SELECT COUNT(*) FROM shot_assets sa WHERE sa.shot_id=s.id) AS asset_count,
++          sc.scene_number
++        FROM shots s
++        LEFT JOIN scenes sc ON sc.id=s.scene_id
++    """
++    params: tuple = ()
++    if project_id is not None:
++        query += " WHERE s.project_id=?"
++        params = (project_id,)
++    query += " ORDER BY s.shot_number"
+     with closing(get_connection()) as conn:
+-        rows = conn.execute("""
+-            SELECT s.*,
+-              (SELECT COUNT(*) FROM shot_assets sa WHERE sa.shot_id=s.id) AS asset_count,
+-              sc.scene_number
+-            FROM shots s
+-            LEFT JOIN scenes sc ON sc.id=s.scene_id
+-            ORDER BY s.shot_number
+-        """).fetchall()
++        rows = conn.execute(query, params).fetchall()
+     return [dict(r) for r in rows]
+ 
+ def _load_assets(conn, shot_id: int):
+diff --git a/app/static/app.css b/app/static/app.css
+index 2a965df..1a0d227 100644
+--- a/app/static/app.css
++++ b/app/static/app.css
+@@ -4,6 +4,9 @@ body{margin:0;background:radial-gradient(circle at 88% 0,#163449,#071019 43%);mi
+ header{padding:24px 28px;border-bottom:1px solid #294352;background:#071019e8}
+ header{position:sticky;top:0;z-index:5;backdrop-filter:blur(12px)}
+ h1{margin:0;color:#bceeff}header p{color:#9fb8c6}
++.project-switcher{display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap}
++.project-switcher label{color:#85a9bc;font-size:13px}
++.project-switcher select{background:#0d1822;color:#dff5ff;border:1px solid #315267;border-radius:8px;padding:8px 10px;font-weight:600}
+ main{max-width:1300px;margin:auto;padding:22px}
+ nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px}
+ button{background:#bceeff;color:#071019;border:0;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer}
+diff --git a/app/static/app.js b/app/static/app.js
+index f0c5bb9..d97f136 100644
+--- a/app/static/app.js
++++ b/app/static/app.js
+@@ -5,8 +5,22 @@ const esc = (value) =>
+     '"': "&quot;", "'": "&#39;"
+   })[char]);
+ 
++let currentProjectId = Number(localStorage.getItem("filmOsProjectId")) || null;
++const PROJECT_SCOPED_BASES = ["/api/scenes", "/api/shots", "/api/assets", "/api/issues", "/api/dashboard"];
++
++function withProject(url) {
++  if (!currentProjectId) return url;
++  const scoped = PROJECT_SCOPED_BASES.some(
++    (base) => url === base || url.startsWith(base + "?") || url.startsWith(base + "/")
++  );
++  if (!scoped) return url;
++  return `${url}${url.includes("?") ? "&" : "?"}project_id=${currentProjectId}`;
++}
++
+ async function api(url, options = {}) {
+-  const response = await fetch(url, {
++  const method = (options.method || "GET").toUpperCase();
++  const finalUrl = method === "GET" ? withProject(url) : url;
++  const response = await fetch(finalUrl, {
+     headers: { "Content-Type": "application/json" },
+     ...options,
+   });
+@@ -15,12 +29,55 @@ async function api(url, options = {}) {
+   return data;
+ }
+ 
++async function loadProjects() {
++  const projects = await api("/api/projects");
++  if (!projects.length) return;
++  if (!currentProjectId || !projects.some((p) => p.id === currentProjectId)) {
++    currentProjectId = projects[0].id;
++    localStorage.setItem("filmOsProjectId", currentProjectId);
++  }
++  $("projectSelect").innerHTML = projects
++    .map((p) => `<option value="${p.id}" ${p.id === currentProjectId ? "selected" : ""}>${esc(p.name)}</option>`)
++    .join("");
++}
++
++async function switchProject(id) {
++  currentProjectId = Number(id);
++  localStorage.setItem("filmOsProjectId", currentProjectId);
++  const loader = loaders[currentTab];
++  if (loader) await loader().catch(showError);
++}
++
++function newProject() {
++  show(`<h2>הפקה חדשה</h2><div class="form-grid">
++    <div class="wide"><label>שם ההפקה</label><input id="npName"></div>
++    <div class="wide"><label>תיאור</label><textarea id="npDescription"></textarea></div>
++    <div class="wide"><label>סגנון חזותי</label><textarea id="npStyle"></textarea></div>
++    <div class="wide"><label>כללים</label><textarea id="npRules"></textarea></div>
++  </div><button onclick="createProject()">יצירת הפקה</button>`);
++}
++
++async function createProject() {
++  const project = await api("/api/projects", {method:"POST", body:JSON.stringify({
++    name:$("npName").value, description:$("npDescription").value,
++    visual_style:$("npStyle").value, rules:$("npRules").value
++  })});
++  currentProjectId = project.id;
++  localStorage.setItem("filmOsProjectId", currentProjectId);
++  closeModal();
++  await loadProjects();
++  await loadDashboard();
++}
++
++let currentTab = "dashboard";
++
+ document.querySelectorAll("nav button").forEach((button) => {
+   button.addEventListener("click", () => {
+     document.querySelectorAll(".panel").forEach((panel) => panel.classList.remove("active"));
+     const target = $(button.dataset.tab);
+     if (!target) return;
+     target.classList.add("active");
++    currentTab = button.dataset.tab;
+     const loader = loaders[button.dataset.tab];
+     if (loader) loader().catch(showError);
+   });
+@@ -68,6 +125,7 @@ function newScene() {
+ 
+ async function createScene() {
+   const scene = await api("/api/scenes", {method:"POST", body:JSON.stringify({
++    project_id:currentProjectId,
+     scene_number:Number($("newSceneNumber").value), title:$("newSceneTitle").value,
+     status:$("newSceneStatus").value, story_goal:$("newSceneGoal").value
+   })});
+@@ -149,6 +207,7 @@ async function newShot(sceneId = null) {
+ 
+ async function createShot() {
+   const shot = await api("/api/shots", {method:"POST", body:JSON.stringify({
++    project_id:currentProjectId,
+     scene_id:Number($("newShotScene").value), shot_number:Number($("newShotNumber").value),
+     title:$("newShotTitle").value
+   })});
+@@ -299,6 +358,7 @@ function newIssueForShot(shotId) {
+ 
+ async function saveIssue(shotId) {
+   await api("/api/issues", {method:"POST", body:JSON.stringify({
++    project_id:currentProjectId,
+     shot_id:shotId, category:$("issueCategory").value, severity:$("issueSeverity").value,
+     message:$("issueMessage").value, expected:$("issueExpected").value,
+     observed:$("issueObserved").value
+@@ -375,7 +435,7 @@ function newAsset() {
+     <label>קישור לרפרנס</label><input id="asUrl"><button onclick="createAsset()">יצירת נכס</button>`);
+ }
+ async function createAsset() {
+-  const payload={asset_type:$("asType").value,name:$("asName").value,description:$("asDescription").value,
++  const payload={project_id:currentProjectId,asset_type:$("asType").value,name:$("asName").value,description:$("asDescription").value,
+   visual_rules:$("asRules").value,master_prompt:$("asMaster").value,negative_prompt:$("asNegative").value,
+   reference_url:$("asUrl").value,approved:false};
+   const asset=await api("/api/assets",{method:"POST",body:JSON.stringify(payload)});await openAsset(asset.id);
+@@ -428,4 +488,11 @@ function closeModal(){$("modal").style.display="none";}
+ function showError(error){console.error(error);show(`<h2>שגיאה</h2><p>${esc(error.message)}</p>`);}
+ 
+ const loaders={dashboard:loadDashboard,scenes:loadScenes,shots:loadShots,assets:loadAssets,qa:loadQA};
+-loadDashboard().catch(showError);
++(async function init() {
++  try {
++    await loadProjects();
++  } catch (error) {
++    console.error(error);
++  }
++  loadDashboard().catch(showError);
++})();
+diff --git a/app/templates/index.html b/app/templates/index.html
+index 786d856..04432af 100644
+--- a/app/templates/index.html
++++ b/app/templates/index.html
+@@ -8,8 +8,13 @@
+ </head>
+ <body>
+ <header>
+-  <h1>AI Film OS — כתובת אפס</h1>
++  <h1>AI Film OS</h1>
+   <p>Story Bible · Scenes · Shots · Continuity · QA</p>
++  <div class="project-switcher">
++    <label for="projectSelect">הפקה פעילה</label>
++    <select id="projectSelect" onchange="switchProject(this.value)"></select>
++    <button class="secondary" onclick="newProject()">הפקה חדשה</button>
++  </div>
+ </header>
+ <main>
+   <nav>
+diff --git a/tests/test_film_os_v3.py b/tests/test_film_os_v3.py
+index 41c890a..a636f6a 100644
+--- a/tests/test_film_os_v3.py
++++ b/tests/test_film_os_v3.py
+@@ -4,7 +4,7 @@ from pathlib import Path
+ 
+ from app.core.config import settings
+ from app.database.connection import get_connection, init_db
+-from app.repositories import issues, scenes, shots
++from app.repositories import issues, projects, scenes, shots, assets
+ 
+ 
+ class FilmOSV3Tests(unittest.TestCase):
+@@ -82,5 +82,60 @@ class FilmOSV3Tests(unittest.TestCase):
+         self.assertEqual(updated["resolved"], 1)
+ 
+ 
++    def test_scenes_shots_assets_and_issues_are_isolated_per_project(self):
++        second_project = projects.create_project({
++            "name": "פרויקט שני",
++            "description": "בדיקת בידוד נתונים",
++            "visual_style": "",
++            "rules": "",
++        })
++
++        second_scene = scenes.create_scene({
++            "project_id": second_project["id"],
++            "scene_number": 1,
++            "title": "סצנה בפרויקט השני",
++            "status": "מתוכנן",
++            "story_goal": "", "emotion": "", "conflict": "",
++            "beginning": "", "ending": "", "notes": "",
++        })
++        shots.create_shot({
++            "project_id": second_project["id"],
++            "scene_id": second_scene["id"],
++            "shot_number": 1,
++            "title": "שוט בפרויקט השני",
++        })
++        assets.create_asset({
++            "project_id": second_project["id"],
++            "asset_type": "דמות",
++            "name": "דמות בפרויקט השני",
++            "approved": False,
++        })
++        issues.create_issue({
++            "project_id": second_project["id"],
++            "severity": "medium",
++            "category": "בדיקה",
++            "message": "בעיה בפרויקט השני",
++            "status": "פתוח",
++        })
++
++        # Original seeded project (id=1) must not see the second project's data.
++        self.assertTrue(all(s["project_id"] == 1 for s in scenes.list_scenes(1)))
++        self.assertTrue(all(s["project_id"] == 1 for s in shots.list_shots(1)))
++        self.assertTrue(all(a["project_id"] == 1 for a in assets.list_assets(1)))
++        self.assertTrue(all(
++            i["project_id"] == 1 for i in issues.list_issues(project_id=1)
++        ))
++
++        # The second project must only see its own single scene/shot/asset/issue.
++        self.assertEqual(len(scenes.list_scenes(second_project["id"])), 1)
++        self.assertEqual(len(shots.list_shots(second_project["id"])), 1)
++        self.assertEqual(len(assets.list_assets(second_project["id"])), 1)
++        self.assertEqual(len(issues.list_issues(project_id=second_project["id"])), 1)
++
++        # Unfiltered calls still return everything (backward compatible default).
++        self.assertGreaterEqual(len(scenes.list_scenes()), 6)
++        self.assertGreaterEqual(len(shots.list_shots()), 21)
++
++
+ if __name__ == "__main__":
+     unittest.main()
