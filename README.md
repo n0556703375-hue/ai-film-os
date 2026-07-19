@@ -48,15 +48,14 @@ python -m unittest discover -s tests -v
 ב־Shot Workspace נוספו שתי פעולות:
 
 - **AI: שיפור פרומפט** — OpenAI משפר את פרומפט השוט עבור Magnific ושומר גרסה חדשה.
-- **Magnific: יצירת תמונה** — שולח משימת Mystic, עוקב אחריה עד להשלמה ושומר את קישור התמונה כתוצאת מדיה בשוט.
+- **Magnific: יצירת תמונה** — שולח משימת Nano Banana Pro, עוקב אחריה עד להשלמה ושומר את קישור התמונה כתוצאת מדיה בשוט.
 
 החיבורים קוראים סודות והגדרות מסביבת ההפעלה בלבד:
 
 - `OPENAI_API_KEY` — לשיפור פרומפטים.
 - `OPENAI_TEXT_MODEL` — ברירת מחדל: `gpt-5-mini`.
 - `MAGNIFIC_API_KEY` — חובה ליצירת תמונות ב־Magnific.
-- `MAGNIFIC_IMAGE_MODEL` — ברירת מחדל: `realism`.
-- `MAGNIFIC_RESOLUTION` — ברירת מחדל: `2k`.
-- `MAGNIFIC_ADHERENCE`, `MAGNIFIC_HDR`, `MAGNIFIC_CREATIVE_DETAILING` — שליטה באופי היצירה.
+- `MAGNIFIC_IMAGE_MODEL` — ברירת מחדל: `nano-banana-pro`.
+- `MAGNIFIC_RESOLUTION` — ברירת מחדל: `2K`.
 
 המפתחות אינם נשמרים במאגר. תוצאות Magnific נשמרות כקישורים חיצוניים ולכן אינן תלויות באחסון המקומי של Render. חיבור הווידאו יופעל בהמשך באמצעות API הווידאו של Magnific.
