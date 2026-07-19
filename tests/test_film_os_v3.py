@@ -4,7 +4,7 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.database.connection import get_connection, init_db
-from app.repositories import issues, scenes, shots
+from app.repositories import issues, projects, scenes, shots, assets
 
 
 class FilmOSV3Tests(unittest.TestCase):
@@ -80,6 +80,61 @@ class FilmOSV3Tests(unittest.TestCase):
         updated = issues.update_issue(issue["id"], {"status": "נפתר", "resolution": "הגוון תוקן"})
         self.assertEqual(updated["status"], "נפתר")
         self.assertEqual(updated["resolved"], 1)
+
+
+    def test_scenes_shots_assets_and_issues_are_isolated_per_project(self):
+        second_project = projects.create_project({
+            "name": "פרויקט שני",
+            "description": "בדיקת בידוד נתונים",
+            "visual_style": "",
+            "rules": "",
+        })
+
+        second_scene = scenes.create_scene({
+            "project_id": second_project["id"],
+            "scene_number": 1,
+            "title": "סצנה בפרויקט השני",
+            "status": "מתוכנן",
+            "story_goal": "", "emotion": "", "conflict": "",
+            "beginning": "", "ending": "", "notes": "",
+        })
+        shots.create_shot({
+            "project_id": second_project["id"],
+            "scene_id": second_scene["id"],
+            "shot_number": 1,
+            "title": "שוט בפרויקט השני",
+        })
+        assets.create_asset({
+            "project_id": second_project["id"],
+            "asset_type": "דמות",
+            "name": "דמות בפרויקט השני",
+            "approved": False,
+        })
+        issues.create_issue({
+            "project_id": second_project["id"],
+            "severity": "medium",
+            "category": "בדיקה",
+            "message": "בעיה בפרויקט השני",
+            "status": "פתוח",
+        })
+
+        # Original seeded project (id=1) must not see the second project's data.
+        self.assertTrue(all(s["project_id"] == 1 for s in scenes.list_scenes(1)))
+        self.assertTrue(all(s["project_id"] == 1 for s in shots.list_shots(1)))
+        self.assertTrue(all(a["project_id"] == 1 for a in assets.list_assets(1)))
+        self.assertTrue(all(
+            i["project_id"] == 1 for i in issues.list_issues(project_id=1)
+        ))
+
+        # The second project must only see its own single scene/shot/asset/issue.
+        self.assertEqual(len(scenes.list_scenes(second_project["id"])), 1)
+        self.assertEqual(len(shots.list_shots(second_project["id"])), 1)
+        self.assertEqual(len(assets.list_assets(second_project["id"])), 1)
+        self.assertEqual(len(issues.list_issues(project_id=second_project["id"])), 1)
+
+        # Unfiltered calls still return everything (backward compatible default).
+        self.assertGreaterEqual(len(scenes.list_scenes()), 6)
+        self.assertGreaterEqual(len(shots.list_shots()), 21)
 
 
 if __name__ == "__main__":
