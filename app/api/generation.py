@@ -206,7 +206,7 @@ def magnific_task(shot_id: int, task_id: str):
                     },
                 },
             )
-            repo.update_shot(shot_id, {"status": "רפרנס"})
+            repo.update_shot(shot_id, {"status": "תמונת טיוטה"})
 
         return {
             "status": "COMPLETED",
