@@ -1,6 +1,6 @@
 import httpx
 from fastapi import APIRouter, HTTPException, Response
-from app.models.schemas import AssetCreate, AssetUpdate
+from app.models.schemas import AssetCreate, AssetUpdate, AssetLockRequest, ReferenceApprovalRequest
 from app.repositories import assets as repo
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
@@ -53,13 +53,50 @@ def update_asset(asset_id: int, update: AssetUpdate):
     fields = update.model_dump(exclude_none=True)
     if not fields:
         raise HTTPException(400, "לא התקבלו שדות לעדכון.")
-    asset = repo.update_asset(asset_id, fields)
+    try:
+        asset = repo.update_asset(asset_id, fields)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    if not asset:
+        raise HTTPException(404, "הנכס לא נמצא.")
+    return asset
+
+@router.put("/{asset_id}/references/{reference_id}/approval")
+def approve_reference(asset_id: int, reference_id: int, request: ReferenceApprovalRequest):
+    try:
+        reference = repo.set_reference_approval(asset_id, reference_id, request.approved)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    if not reference:
+        raise HTTPException(404, "תמונת הרפרנס לא נמצאה.")
+    return reference
+
+@router.post("/{asset_id}/lock")
+def lock_character(asset_id: int, request: AssetLockRequest):
+    try:
+        asset = repo.lock_character(asset_id, request.master_reference_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    if not asset:
+        raise HTTPException(404, "הנכס לא נמצא.")
+    return asset
+
+@router.post("/{asset_id}/unlock")
+def unlock_character(asset_id: int):
+    try:
+        asset = repo.unlock_character(asset_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
     if not asset:
         raise HTTPException(404, "הנכס לא נמצא.")
     return asset
 
 @router.delete("/{asset_id}")
 def delete_asset(asset_id: int):
-    if not repo.delete_asset(asset_id):
+    try:
+        deleted = repo.delete_asset(asset_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    if not deleted:
         raise HTTPException(404, "הנכס לא נמצא.")
     return {"deleted": True}

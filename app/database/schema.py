@@ -55,6 +55,9 @@ CREATE TABLE IF NOT EXISTS assets (
     negative_prompt TEXT NOT NULL DEFAULT '',
     reference_url TEXT NOT NULL DEFAULT '',
     approved INTEGER NOT NULL DEFAULT 0,
+    lock_status TEXT NOT NULL DEFAULT 'draft',
+    master_reference_id INTEGER,
+    locked_at TEXT,
     version INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
@@ -76,6 +79,7 @@ CREATE TABLE IF NOT EXISTS asset_reference_images (
     prompt TEXT NOT NULL DEFAULT '',
     provider TEXT NOT NULL DEFAULT 'Magnific',
     model TEXT NOT NULL DEFAULT 'Nano Banana Pro',
+    approved INTEGER NOT NULL DEFAULT 0,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE

@@ -23,6 +23,18 @@ ASPECT_RATIOS = {
 }
 
 
+def _validate_locked_characters(shot: dict) -> None:
+    unlocked = [
+        asset["name"] for asset in shot.get("assets", [])
+        if asset.get("asset_type") == "דמות" and asset.get("lock_status") != "locked"
+    ]
+    if unlocked:
+        raise HTTPException(
+            409,
+            "לא ניתן ליצור שוט עם דמויות לא נעולות: " + ", ".join(unlocked),
+        )
+
+
 @router.get("/status")
 def status():
     return integration_status()
@@ -34,14 +46,19 @@ def generate_asset_reference(asset_id: int, request: CharacterReferenceRequest):
         raise HTTPException(404, "הדמות לא נמצאה.")
     if asset["asset_type"] != "דמות":
         raise HTTPException(400, "יצירת רפרנס זו זמינה כרגע לנכסים מסוג דמות.")
+    if asset.get("lock_status") == "locked":
+        raise HTTPException(409, "הדמות נעולה. יש לפתוח את הנעילה לפני יצירת רפרנסים חדשים.")
     try:
         prompt = build_character_reference_prompt(asset, request.view_type, request.instructions)
-        existing = [item["url"] for item in asset.get("reference_images", [])]
+        approved = [item["url"] for item in asset.get("reference_images", []) if item.get("approved")]
+        existing = approved or [item["url"] for item in asset.get("reference_images", [])]
         seed_references = [] if request.view_type == "portrait" else existing[:1]
         task = submit_magnific_reference(prompt, seed_references)
         return {**task, "asset_id": asset_id, "view_type": request.view_type}
     except GenerationNotConfigured as exc:
         raise HTTPException(503, str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(502, f"יצירת רפרנס הדמות נכשלה: {exc}")
 
@@ -73,7 +90,6 @@ def asset_reference_task(asset_id: int, task_id: str, view_type: str = "portrait
     except Exception as exc:
         raise HTTPException(502, f"בדיקת רפרנס הדמות נכשלה: {exc}")
 
-
 @router.post("/shots/{shot_id}")
 def generate_for_shot(shot_id: int, request: GenerationRequest):
     shot = repo.get_shot(shot_id)
@@ -102,6 +118,7 @@ def generate_for_shot(shot_id: int, request: GenerationRequest):
             }
 
         if request.media_type == "image":
+            _validate_locked_characters(shot)
             if not shot.get("prompt"):
                 raise HTTPException(
                     400,
@@ -130,7 +147,6 @@ def generate_for_shot(shot_id: int, request: GenerationRequest):
         raise
     except Exception as exc:
         raise HTTPException(502, f"שירות היצירה נכשל: {exc}")
-
 
 @router.get("/shots/{shot_id}/magnific/{task_id}")
 def magnific_task(shot_id: int, task_id: str):

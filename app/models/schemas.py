@@ -12,6 +12,7 @@ ShotType = Literal[
 ]
 
 AssetType = Literal["דמות", "לוקיישן", "אביזר", "לבוש", "כלל", "סגנון"]
+AssetLockStatus = Literal["draft", "review", "locked"]
 
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=300)
@@ -73,6 +74,13 @@ class AssetUpdate(BaseModel):
     negative_prompt: str | None = Field(None, max_length=20000)
     reference_url: str | None = Field(None, max_length=2000)
     approved: bool | None = None
+    lock_status: AssetLockStatus | None = None
+
+class AssetLockRequest(BaseModel):
+    master_reference_id: int = Field(ge=1)
+
+class ReferenceApprovalRequest(BaseModel):
+    approved: bool = True
 
 class AssetLinkRequest(BaseModel):
     asset_ids: list[int]
