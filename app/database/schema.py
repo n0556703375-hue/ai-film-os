@@ -127,4 +127,17 @@ CREATE TABLE IF NOT EXISTS media_results (
     FOREIGN KEY(shot_id) REFERENCES shots(id) ON DELETE CASCADE,
     FOREIGN KEY(prompt_version_id) REFERENCES prompt_versions(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS approval_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shot_id INTEGER NOT NULL,
+    media_result_id INTEGER,
+    event_type TEXT NOT NULL,
+    from_status TEXT NOT NULL DEFAULT '',
+    to_status TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(shot_id) REFERENCES shots(id) ON DELETE CASCADE,
+    FOREIGN KEY(media_result_id) REFERENCES media_results(id) ON DELETE SET NULL
+);
 """
