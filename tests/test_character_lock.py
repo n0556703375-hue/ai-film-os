@@ -43,7 +43,7 @@ class CharacterLockTests(unittest.TestCase):
         self.assertEqual(locked["lock_status"], "locked")
         self.assertEqual(locked["master_reference_id"], self.reference["id"])
         self.assertEqual(locked["reference_url"], self.reference["url"])
-        with self.assertRaisesRegex(ValueError, "נעולה"):
+        with self.assertRaisesRegex(ValueError, "נכס נעול"):
             assets.update_asset(self.character["id"], {"reference_url": "https://example.com/other.jpg"})
 
     def test_unlock_allows_identity_edit(self):

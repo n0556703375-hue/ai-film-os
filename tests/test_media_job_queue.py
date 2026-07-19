@@ -104,6 +104,32 @@ class MediaJobQueueTests(unittest.TestCase):
                 self.project_id, self.shot["id"], "image", {}, "shot-1-invalid", max_attempts=0
             )
 
+    def test_cost_tracking_and_project_summary(self):
+        first, _ = jobs.enqueue_job(
+            self.project_id, self.shot["id"], "image", {}, "shot-1-cost-image", estimated_cost_usd=0.08
+        )
+        second, _ = jobs.enqueue_job(
+            self.project_id, self.shot["id"], "video", {}, "shot-1-cost-video", estimated_cost_usd=1.25
+        )
+        jobs.complete_job(first["id"], {"url": "image.png"}, actual_cost_usd=0.07)
+        jobs.complete_job(second["id"], {"url": "video.mp4"}, actual_cost_usd=1.10)
+
+        summary = jobs.get_cost_summary(self.project_id)
+        self.assertEqual(summary["job_count"], 2)
+        self.assertAlmostEqual(summary["estimated_cost_usd"], 1.33)
+        self.assertAlmostEqual(summary["actual_cost_usd"], 1.17)
+
+    def test_negative_costs_are_rejected(self):
+        with self.assertRaises(ValueError):
+            jobs.enqueue_job(
+                self.project_id, self.shot["id"], "image", {}, "shot-negative-cost", estimated_cost_usd=-0.01
+            )
+        queued, _ = jobs.enqueue_job(
+            self.project_id, self.shot["id"], "image", {}, "shot-complete-negative"
+        )
+        with self.assertRaises(ValueError):
+            jobs.complete_job(queued["id"], {}, actual_cost_usd=-0.01)
+
 
 if __name__ == "__main__":
     unittest.main()

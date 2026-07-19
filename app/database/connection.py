@@ -53,6 +53,10 @@ def migrate_database(conn: sqlite3.Connection) -> None:
         "resolution": "TEXT NOT NULL DEFAULT ''",
         "updated_at": "TEXT NOT NULL DEFAULT ''",
     })
+    _add_columns(conn, "media_jobs", {
+        "estimated_cost_usd": "REAL NOT NULL DEFAULT 0",
+        "actual_cost_usd": "REAL NOT NULL DEFAULT 0",
+    })
     conn.execute("""
         UPDATE continuity_issues
         SET status=CASE WHEN resolved=1 THEN 'נפתר' ELSE 'פתוח' END

@@ -155,6 +155,8 @@ CREATE TABLE IF NOT EXISTS media_jobs (
     max_attempts INTEGER NOT NULL DEFAULT 3,
     worker_id TEXT NOT NULL DEFAULT '',
     last_error TEXT NOT NULL DEFAULT '',
+    estimated_cost_usd REAL NOT NULL DEFAULT 0,
+    actual_cost_usd REAL NOT NULL DEFAULT 0,
     started_at TEXT,
     finished_at TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
