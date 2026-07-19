@@ -135,7 +135,7 @@ def submit_magnific_image(
     reference_images = []
     for asset in shot.get("assets", []):
         urls = asset.get("reference_images") or [asset.get("reference_url", "")]
-        for candidate in urls:
+        for candidate in urls[:1]:
             url = (candidate or "").strip()
             if url and url not in reference_images:
                 reference_images.append(url)
