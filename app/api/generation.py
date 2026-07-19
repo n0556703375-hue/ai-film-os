@@ -22,16 +22,20 @@ ASPECT_RATIOS = {
     "1024x1536": "9:16",
 }
 
+LOCK_REQUIRED_TYPES = {"דמות", "לוקיישן", "לבוש"}
 
-def _validate_locked_characters(shot: dict) -> None:
+
+def _validate_locked_assets(shot: dict) -> None:
     unlocked = [
-        asset["name"] for asset in shot.get("assets", [])
-        if asset.get("asset_type") == "דמות" and asset.get("lock_status") != "locked"
+        f'{asset.get("asset_type", "נכס")}: {asset.get("name", "ללא שם")}'
+        for asset in shot.get("assets", [])
+        if asset.get("asset_type") in LOCK_REQUIRED_TYPES
+        and asset.get("lock_status") != "locked"
     ]
     if unlocked:
         raise HTTPException(
             409,
-            "לא ניתן ליצור שוט עם דמויות לא נעולות: " + ", ".join(unlocked),
+            "לא ניתן ליצור שוט לפני נעילת כל נכסי ההפקה: " + ", ".join(unlocked),
         )
 
 
@@ -39,15 +43,16 @@ def _validate_locked_characters(shot: dict) -> None:
 def status():
     return integration_status()
 
+
 @router.post("/assets/{asset_id}/references")
 def generate_asset_reference(asset_id: int, request: CharacterReferenceRequest):
     asset = asset_repo.get_asset(asset_id)
     if not asset:
-        raise HTTPException(404, "הדמות לא נמצאה.")
-    if asset["asset_type"] != "דמות":
-        raise HTTPException(400, "יצירת רפרנס זו זמינה כרגע לנכסים מסוג דמות.")
+        raise HTTPException(404, "הנכס לא נמצא.")
+    if asset["asset_type"] not in LOCK_REQUIRED_TYPES:
+        raise HTTPException(400, "יצירת רפרנס זמינה לדמות, לוקיישן או לבוש.")
     if asset.get("lock_status") == "locked":
-        raise HTTPException(409, "הדמות נעולה. יש לפתוח את הנעילה לפני יצירת רפרנסים חדשים.")
+        raise HTTPException(409, "הנכס נעול. יש לפתוח את הנעילה לפני יצירת רפרנסים חדשים.")
     try:
         prompt = build_character_reference_prompt(asset, request.view_type, request.instructions)
         approved = [item["url"] for item in asset.get("reference_images", []) if item.get("approved")]
@@ -60,13 +65,14 @@ def generate_asset_reference(asset_id: int, request: CharacterReferenceRequest):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(502, f"יצירת רפרנס הדמות נכשלה: {exc}")
+        raise HTTPException(502, f"יצירת רפרנס הנכס נכשלה: {exc}")
+
 
 @router.get("/assets/{asset_id}/references/{task_id}")
 def asset_reference_task(asset_id: int, task_id: str, view_type: str = "portrait", prompt: str = ""):
     asset = asset_repo.get_asset(asset_id)
     if not asset:
-        raise HTTPException(404, "הדמות לא נמצאה.")
+        raise HTTPException(404, "הנכס לא נמצא.")
     try:
         task = get_magnific_image(task_id)
         if task["status"] != "COMPLETED":
@@ -88,7 +94,8 @@ def asset_reference_task(asset_id: int, task_id: str, view_type: str = "portrait
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(502, f"בדיקת רפרנס הדמות נכשלה: {exc}")
+        raise HTTPException(502, f"בדיקת רפרנס הנכס נכשלה: {exc}")
+
 
 @router.post("/shots/{shot_id}")
 def generate_for_shot(shot_id: int, request: GenerationRequest):
@@ -118,7 +125,7 @@ def generate_for_shot(shot_id: int, request: GenerationRequest):
             }
 
         if request.media_type == "image":
-            _validate_locked_characters(shot)
+            _validate_locked_assets(shot)
             if not shot.get("prompt"):
                 raise HTTPException(
                     400,
@@ -147,6 +154,7 @@ def generate_for_shot(shot_id: int, request: GenerationRequest):
         raise
     except Exception as exc:
         raise HTTPException(502, f"שירות היצירה נכשל: {exc}")
+
 
 @router.get("/shots/{shot_id}/magnific/{task_id}")
 def magnific_task(shot_id: int, task_id: str):
