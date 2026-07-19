@@ -100,6 +100,13 @@ class SceneCreate(BaseModel):
     ending: str = Field(default="", max_length=10000)
     notes: str = Field(default="", max_length=10000)
 
+class ScriptImportRequest(BaseModel):
+    project_id: int = Field(ge=1)
+    screenplay: str = Field(min_length=50, max_length=500000)
+    replace_existing: bool = False
+    generate_shot_maps: bool = True
+    target_shots_per_minute: float = Field(default=5.0, ge=1.0, le=12.0)
+
 class MediaResultCreate(BaseModel):
     media_type: Literal["image", "video"]
     url: str = Field(min_length=1, max_length=4000)
@@ -117,13 +124,12 @@ class GenerationRequest(BaseModel):
     quality: Literal["low", "medium", "high"] = "medium"
 
 class ShotMapRequest(BaseModel):
-    shot_count: int = Field(default=6, ge=1, le=20)
+    shot_count: int = Field(default=6, ge=1, le=60)
     replace_existing: bool = False
 
 class CharacterReferenceRequest(BaseModel):
     view_type: Literal["portrait", "full_body", "three_quarter"] = "portrait"
     instructions: str = Field(default="", max_length=3000)
-
 
 class ContinuityIssueCreate(BaseModel):
     project_id: int = Field(default=1, ge=1)

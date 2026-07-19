@@ -1,6 +1,7 @@
 from contextlib import closing
 from app.database.connection import get_connection
 
+
 def create_generated_shots(scene_id: int, shots: list[dict], replace_existing: bool = False):
     allowed = {"title", "shot_type", "duration_seconds", "action", "camera", "camera_angle",
                "composition", "lens", "lighting", "movement", "mood", "color_palette", "dialogue"}
@@ -30,6 +31,38 @@ def create_generated_shots(scene_id: int, shots: list[dict], replace_existing: b
         conn.commit()
     return get_scene(scene_id)
 
+
+def import_scenes(project_id: int, scenes: list[dict], replace_existing: bool = False):
+    with closing(get_connection()) as conn:
+        if not conn.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+            raise ValueError("הפרויקט אינו קיים.")
+        existing = conn.execute("SELECT COUNT(*) FROM scenes WHERE project_id=?", (project_id,)).fetchone()[0]
+        if existing and not replace_existing:
+            raise ValueError("כבר קיימות סצנות בפרויקט. יש לבחור החלפה מפורשת.")
+        if replace_existing:
+            conn.execute("DELETE FROM scenes WHERE project_id=?", (project_id,))
+        created = []
+        for scene in scenes:
+            cur = conn.execute("""
+                INSERT INTO scenes (
+                    project_id, scene_number, title, status, story_goal,
+                    emotion, conflict, beginning, ending, notes
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)
+            """, (
+                project_id, scene["scene_number"], scene["title"], scene.get("status", "מתוכנן"),
+                scene.get("story_goal", ""), scene.get("emotion", ""), scene.get("conflict", ""),
+                scene.get("beginning", ""), scene.get("ending", ""), scene.get("notes", ""),
+            ))
+            created.append({
+                "id": cur.lastrowid,
+                "scene_number": scene["scene_number"],
+                "recommended_shot_count": scene.get("recommended_shot_count", 6),
+                "estimated_duration_seconds": scene.get("estimated_duration_seconds", 60),
+            })
+        conn.commit()
+    return created
+
+
 def list_scenes(project_id: int | None = None):
     query = """
         SELECT sc.*,
@@ -46,6 +79,7 @@ def list_scenes(project_id: int | None = None):
         rows = conn.execute(query, params).fetchall()
     return [dict(r) for r in rows]
 
+
 def get_scene(scene_id: int):
     with closing(get_connection()) as conn:
         scene = conn.execute("SELECT * FROM scenes WHERE id=?", (scene_id,)).fetchone()
@@ -60,6 +94,7 @@ def get_scene(scene_id: int):
     result["shots"] = [dict(s) for s in shots]
     return result
 
+
 def update_scene(scene_id: int, fields: dict):
     with closing(get_connection()) as conn:
         if not conn.execute("SELECT 1 FROM scenes WHERE id=?", (scene_id,)).fetchone():
@@ -71,6 +106,7 @@ def update_scene(scene_id: int, fields: dict):
         )
         conn.commit()
     return get_scene(scene_id)
+
 
 def create_scene(data: dict):
     data = dict(data)

@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI Film OS",
-    version="3.4.0",
+    version="3.5.0",
     lifespan=lifespan,
 )
 
@@ -44,3 +44,7 @@ app.mount("/generated", StaticFiles(directory=settings.generated_media_path), na
 @app.get("/", response_class=HTMLResponse)
 def home():
     return (BASE_DIR / "templates" / "index.html").read_text(encoding="utf-8")
+
+@app.get("/script-import", response_class=HTMLResponse)
+def script_import():
+    return (BASE_DIR / "templates" / "script_import.html").read_text(encoding="utf-8")
