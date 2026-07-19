@@ -1,7 +1,4 @@
-import base64
-import uuid
-from pathlib import Path
-
+import httpx
 from openai import OpenAI
 
 from app.core.config import settings
@@ -13,27 +10,32 @@ class GenerationNotConfigured(RuntimeError):
 
 
 def integration_status() -> dict:
-    configured = bool(settings.openai_api_key)
+    openai_ready = bool(settings.openai_api_key)
+    magnific_ready = bool(settings.magnific_api_key)
     return {
         "openai": {
-            "configured": configured,
+            "configured": openai_ready,
             "text": {
-                "enabled": configured,
+                "enabled": openai_ready,
                 "model": settings.openai_text_model,
             },
+        },
+        "magnific": {
+            "configured": magnific_ready,
             "image": {
-                "enabled": configured,
-                "model": settings.openai_image_model,
+                "enabled": magnific_ready,
+                "model": settings.magnific_image_model,
+                "resolution": settings.magnific_resolution,
             },
             "video": {
                 "enabled": False,
-                "reason": "video_provider_not_configured",
+                "reason": "video_model_not_selected",
             },
-        }
+        },
     }
 
 
-def _client() -> OpenAI:
+def _openai_client() -> OpenAI:
     if not settings.openai_api_key:
         raise GenerationNotConfigured(
             "OPENAI_API_KEY אינו מוגדר. יש להוסיף אותו לסודות של סביבת ההפעלה."
@@ -41,10 +43,22 @@ def _client() -> OpenAI:
     return OpenAI(api_key=settings.openai_api_key)
 
 
+def _magnific_headers() -> dict:
+    if not settings.magnific_api_key:
+        raise GenerationNotConfigured(
+            "MAGNIFIC_API_KEY אינו מוגדר. יש ליצור מפתח API ב־Magnific ולשמור אותו בסודות של Render."
+        )
+    return {
+        "x-magnific-api-key": settings.magnific_api_key,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+
 def refine_prompt(shot: dict, instructions: str = "") -> str:
     source_prompt = shot.get("prompt") or build_prompt(shot)
     request = f"""You are the production prompt specialist for AI Film OS.
-Rewrite the source as one precise, production-ready cinematic image prompt.
+Rewrite the source as one precise, production-ready cinematic image prompt for Magnific Mystic.
 Preserve every approved character, wardrobe, location and prop rule.
 Do not add people, objects, text, logos or story facts that are not supplied.
 Return only the final prompt in English.
@@ -55,7 +69,7 @@ SOURCE PROMPT:
 ADDITIONAL DIRECTION:
 {instructions or "None"}
 """
-    response = _client().responses.create(
+    response = _openai_client().responses.create(
         model=settings.openai_text_model,
         input=request,
     )
@@ -65,40 +79,59 @@ ADDITIONAL DIRECTION:
     return result
 
 
-def generate_image(
+def submit_magnific_image(
     shot: dict,
     *,
     instructions: str = "",
-    size: str = "1536x1024",
-    quality: str = "medium",
+    aspect_ratio: str = "widescreen_16_9",
 ) -> dict:
     prompt = shot.get("prompt") or build_prompt(shot)
     if instructions:
         prompt = f"{prompt}\n\nADDITIONAL DIRECTION\n{instructions}"
 
-    result = _client().images.generate(
-        model=settings.openai_image_model,
-        prompt=prompt,
-        size=size,
-        quality=quality,
-        n=1,
-    )
-    image_base64 = result.data[0].b64_json
-    if not image_base64:
-        raise RuntimeError("OpenAI לא החזיר נתוני תמונה.")
-
-    settings.generated_media_path.mkdir(parents=True, exist_ok=True)
-    filename = f"shot-{shot['id']}-{uuid.uuid4().hex[:12]}.png"
-    target = Path(settings.generated_media_path) / filename
-    target.write_bytes(base64.b64decode(image_base64))
-
+    payload = {
+        "prompt": prompt,
+        "resolution": settings.magnific_resolution,
+        "aspect_ratio": aspect_ratio,
+        "model": settings.magnific_image_model,
+        "engine": "automatic",
+        "fixed_generation": False,
+        "filter_nsfw": True,
+        "adherence": settings.magnific_adherence,
+        "hdr": settings.magnific_hdr,
+        "creative_detailing": settings.magnific_creative_detailing,
+    }
+    with httpx.Client(timeout=45.0) as client:
+        response = client.post(
+            f"{settings.magnific_api_base}/v1/ai/mystic",
+            headers=_magnific_headers(),
+            json=payload,
+        )
+    response.raise_for_status()
+    data = response.json().get("data", {})
+    task_id = data.get("task_id")
+    if not task_id:
+        raise RuntimeError("Magnific לא החזיר מזהה משימה.")
     return {
-        "url": f"/generated/{filename}",
-        "provider": "OpenAI",
-        "model": settings.openai_image_model,
-        "metadata": {
-            "size": size,
-            "quality": quality,
-            "source": "automatic_generation",
-        },
+        "task_id": task_id,
+        "status": data.get("status", "IN_PROGRESS"),
+        "generated": data.get("generated", []),
+        "provider": "Magnific",
+        "model": f"Mystic/{settings.magnific_image_model}",
+    }
+
+
+def get_magnific_image(task_id: str) -> dict:
+    with httpx.Client(timeout=30.0) as client:
+        response = client.get(
+            f"{settings.magnific_api_base}/v1/ai/mystic/{task_id}",
+            headers=_magnific_headers(),
+        )
+    response.raise_for_status()
+    data = response.json().get("data", {})
+    return {
+        "task_id": data.get("task_id", task_id),
+        "status": data.get("status", "UNKNOWN"),
+        "generated": data.get("generated", []),
+        "has_nsfw": data.get("has_nsfw", []),
     }
