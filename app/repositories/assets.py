@@ -2,6 +2,8 @@ from contextlib import closing
 import json
 from app.database.connection import get_connection
 
+LOCKABLE_TYPES = {"דמות", "לוקיישן", "לבוש"}
+
 
 def list_assets(project_id: int | None = None):
     query = "SELECT * FROM assets"
@@ -79,7 +81,7 @@ def set_reference_approval(asset_id: int, reference_id: int, approved: bool):
         if not approved:
             master = conn.execute("SELECT master_reference_id,lock_status FROM assets WHERE id=?", (asset_id,)).fetchone()
             if master and master["lock_status"] == "locked" and master["master_reference_id"] == reference_id:
-                raise ValueError("לא ניתן לבטל אישור לרפרנס הראשי של דמות נעולה. יש לפתוח את הנעילה תחילה.")
+                raise ValueError("לא ניתן לבטל אישור לרפרנס הראשי של נכס נעול. יש לפתוח את הנעילה תחילה.")
         conn.execute(
             "UPDATE asset_reference_images SET approved=? WHERE id=? AND asset_id=?",
             (int(approved), reference_id, asset_id),
@@ -88,21 +90,21 @@ def set_reference_approval(asset_id: int, reference_id: int, approved: bool):
     return get_reference_image(asset_id, reference_id)
 
 
-def lock_character(asset_id: int, master_reference_id: int):
+def lock_asset(asset_id: int, master_reference_id: int):
     with closing(get_connection()) as conn:
         asset = conn.execute("SELECT * FROM assets WHERE id=?", (asset_id,)).fetchone()
         if not asset:
             return None
-        if asset["asset_type"] != "דמות":
-            raise ValueError("Character Lock זמין רק לנכס מסוג דמות.")
+        if asset["asset_type"] not in LOCKABLE_TYPES:
+            raise ValueError("נעילת Master זמינה לדמות, לוקיישן או לבוש בלבד.")
         reference = conn.execute(
             "SELECT * FROM asset_reference_images WHERE id=? AND asset_id=?",
             (master_reference_id, asset_id),
         ).fetchone()
         if not reference:
-            raise ValueError("תמונת הרפרנס שנבחרה אינה שייכת לדמות.")
+            raise ValueError("תמונת הרפרנס שנבחרה אינה שייכת לנכס.")
         if not reference["approved"]:
-            raise ValueError("יש לאשר את תמונת הרפרנס לפני נעילת הדמות.")
+            raise ValueError("יש לאשר את תמונת הרפרנס לפני נעילת הנכס.")
         conn.execute("""
             UPDATE assets
             SET lock_status='locked', approved=1, master_reference_id=?, reference_url=?,
@@ -113,13 +115,13 @@ def lock_character(asset_id: int, master_reference_id: int):
     return get_asset(asset_id)
 
 
-def unlock_character(asset_id: int):
+def unlock_asset(asset_id: int):
     with closing(get_connection()) as conn:
         asset = conn.execute("SELECT * FROM assets WHERE id=?", (asset_id,)).fetchone()
         if not asset:
             return None
-        if asset["asset_type"] != "דמות":
-            raise ValueError("Character Lock זמין רק לנכס מסוג דמות.")
+        if asset["asset_type"] not in LOCKABLE_TYPES:
+            raise ValueError("נעילת Master זמינה לדמות, לוקיישן או לבוש בלבד.")
         conn.execute("""
             UPDATE assets
             SET lock_status='review', master_reference_id=NULL, locked_at=NULL,
@@ -128,6 +130,14 @@ def unlock_character(asset_id: int):
         """, (asset_id,))
         conn.commit()
     return get_asset(asset_id)
+
+
+def lock_character(asset_id: int, master_reference_id: int):
+    return lock_asset(asset_id, master_reference_id)
+
+
+def unlock_character(asset_id: int):
+    return unlock_asset(asset_id)
 
 
 def create_asset(data: dict):
@@ -163,7 +173,7 @@ def update_asset(asset_id: int, fields: dict):
         if current["lock_status"] == "locked":
             protected = {"asset_type", "reference_url", "master_prompt", "visual_rules", "negative_prompt"}
             if protected.intersection(fields):
-                raise ValueError("לא ניתן לשנות שדות זהות של דמות נעולה. יש לפתוח את הנעילה תחילה.")
+                raise ValueError("לא ניתן לשנות שדות Master של נכס נעול. יש לפתוח את הנעילה תחילה.")
         sets = ", ".join(f"{k}=?" for k in fields)
         conn.execute(
             f"""UPDATE assets SET {sets},
@@ -180,7 +190,7 @@ def delete_asset(asset_id: int) -> bool:
         if not asset:
             return False
         if asset["lock_status"] == "locked":
-            raise ValueError("לא ניתן למחוק דמות נעולה. יש לפתוח את הנעילה תחילה.")
+            raise ValueError("לא ניתן למחוק נכס נעול. יש לפתוח את הנעילה תחילה.")
         cur = conn.execute("DELETE FROM assets WHERE id=?", (asset_id,))
         conn.commit()
     return cur.rowcount > 0

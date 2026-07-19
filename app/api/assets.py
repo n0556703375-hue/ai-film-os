@@ -31,11 +31,8 @@ def reference_image(asset_id: int, reference_id: int):
         content_type = upstream.headers.get("content-type", "image/jpeg").split(";")[0]
         if not content_type.startswith("image/"):
             raise HTTPException(502, "מקור הרפרנס לא החזיר קובץ תמונה.")
-        return Response(
-            content=upstream.content,
-            media_type=content_type,
-            headers={"Cache-Control": "public, max-age=3600"},
-        )
+        return Response(content=upstream.content, media_type=content_type,
+                        headers={"Cache-Control": "public, max-age=3600"})
     except HTTPException:
         raise
     except Exception as exc:
@@ -72,9 +69,9 @@ def approve_reference(asset_id: int, reference_id: int, request: ReferenceApprov
     return reference
 
 @router.post("/{asset_id}/lock")
-def lock_character(asset_id: int, request: AssetLockRequest):
+def lock_asset(asset_id: int, request: AssetLockRequest):
     try:
-        asset = repo.lock_character(asset_id, request.master_reference_id)
+        asset = repo.lock_asset(asset_id, request.master_reference_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc))
     if not asset:
@@ -82,9 +79,9 @@ def lock_character(asset_id: int, request: AssetLockRequest):
     return asset
 
 @router.post("/{asset_id}/unlock")
-def unlock_character(asset_id: int):
+def unlock_asset(asset_id: int):
     try:
-        asset = repo.unlock_character(asset_id)
+        asset = repo.unlock_asset(asset_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc))
     if not asset:
