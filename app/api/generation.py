@@ -13,9 +13,9 @@ from app.services.generation import (
 router = APIRouter(prefix="/api/generation", tags=["generation"])
 
 ASPECT_RATIOS = {
-    "1024x1024": "square_1_1",
-    "1536x1024": "widescreen_16_9",
-    "1024x1536": "portrait_9_16",
+    "1024x1024": "1:1",
+    "1536x1024": "16:9",
+    "1024x1536": "9:16",
 }
 
 
@@ -122,7 +122,7 @@ def magnific_task(shot_id: int, task_id: str):
                     "media_type": "image",
                     "url": generated[0],
                     "provider": "Magnific",
-                    "model": f"Mystic/{settings_model()}",
+                    "model": "Nano Banana Pro",
                     "prompt_version_id": prompt_version_id,
                     "status": "טיוטה",
                     "notes": "נוצר אוטומטית ב־Magnific מתוך Shot Workspace",
