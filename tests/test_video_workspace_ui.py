@@ -11,7 +11,12 @@ class VideoWorkspaceUiTests(unittest.TestCase):
         self.assertIn("videoMotion", script)
         self.assertIn("videoAudio", script)
         self.assertIn("videoModel", script)
-        self.assertIn("/video/queue", script)
+        self.assertIn("/api/video-generation/shots/${shotId}/queue", script)
+        self.assertIn('value="ambient"', script)
+        self.assertIn('value="high_fidelity"', script)
+        self.assertNotIn("/api/generation/shots/${shotId}/video/queue", script)
+        self.assertNotIn('value="ambience"', script)
+        self.assertNotIn('value="high_quality"', script)
         self.assertIn("confirm(", script)
 
     def test_video_completion_renders_a_video_element(self):
