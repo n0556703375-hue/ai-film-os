@@ -263,7 +263,7 @@ async function openShot(id) {
           </div>
           <div class="row">
             <button class="secondary" onclick="generateWithOpenAI(${shot.id}, 'text')">AI: שיפור פרומפט</button>
-            <button onclick="generateWithOpenAI(${shot.id}, 'image')">AI: יצירת תמונה</button>
+            <button onclick="generateWithOpenAI(${shot.id}, 'image')">Magnific: יצירת תמונה</button>
           </div>
         </div>
       </div>
@@ -410,9 +410,9 @@ async function generateWithOpenAI(id, mediaType) {
       })
     });
     if (data.media_type === "image") {
-      show(`<h2>התמונה נוצרה</h2>
-        <img src="${esc(data.media.url)}" alt="תוצאת שוט" style="max-width:100%;border-radius:12px">
-        <div class="row"><button onclick="openShot(${id})">חזרה לשוט</button></div>`);
+      show(`<h2>Magnific יוצר את התמונה</h2>
+        <p>המשימה נשלחה. המערכת תבדוק אוטומטית מתי התמונה מוכנה.</p>`);
+      await waitForMagnific(id, data.task_id);
       return;
     }
     show(`<h2>הפרומפט שופר ונשמר</h2><pre>${esc(data.prompt)}</pre>
@@ -420,6 +420,29 @@ async function generateWithOpenAI(id, mediaType) {
   } catch (error) {
     showError(error);
   }
+}
+
+async function waitForMagnific(shotId, taskId) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    try {
+      const data = await api(`/api/generation/shots/${shotId}/magnific/${encodeURIComponent(taskId)}`);
+      if (data.status === "COMPLETED" && data.media) {
+        show(`<h2>התמונה נוצרה ב־Magnific</h2>
+          <img src="${esc(data.media.url)}" alt="תוצאת שוט" style="max-width:100%;border-radius:12px">
+          <div class="row"><button onclick="openShot(${shotId})">שמירה וחזרה לשוט</button></div>`);
+        return;
+      }
+      $("modalContent").innerHTML = `<h2>Magnific יוצר את התמונה</h2>
+        <p>סטטוס: ${esc(data.status)} · בדיקה ${attempt + 1}</p>`;
+    } catch (error) {
+      showError(error);
+      return;
+    }
+  }
+  show(`<h2>המשימה עדיין בתהליך</h2>
+    <p>Magnific ממשיך ליצור את התמונה. אפשר לחזור לשוט ולבדוק שוב מאוחר יותר.</p>
+    <button onclick="openShot(${shotId})">חזרה לשוט</button>`);
 }
 
 async function checkContinuity(id) {
