@@ -89,11 +89,16 @@ def submit_magnific_image(
     if instructions:
         prompt = f"{prompt}\n\nADDITIONAL DIRECTION\n{instructions}"
 
+    reference_images = []
+    for asset in shot.get("assets", []):
+        url = (asset.get("reference_url") or "").strip()
+        if url and url not in reference_images:
+            reference_images.append(url)
     payload = {
         "prompt": prompt,
         "resolution": settings.magnific_resolution,
         "aspect_ratio": aspect_ratio,
-        "reference_images": [],
+        "reference_images": reference_images[:14],
     }
     with httpx.Client(timeout=45.0) as client:
         response = client.post(
