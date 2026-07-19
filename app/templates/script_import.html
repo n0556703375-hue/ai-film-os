@@ -14,14 +14,82 @@
 <label>קצב שוטים ממוצע לדקה</label><input id="rate" type="number" min="1" max="12" step="0.5" value="5">
 <label><input id="replace" type="checkbox"> החלפת כל הסצנות הקיימות בפרויקט</label>
 <label><input id="generate" type="checkbox" checked> יצירת מפות שוטים ופרומפטים לכל הסצנות</label>
-<div class="row"><button onclick="runImport()">פירוק התסריט ויצירת הסרט</button><a href="/">חזרה למערכת</a></div>
+<div class="row"><button id="importButton" onclick="runImport()">פירוק התסריט ויצירת הסרט</button><a href="/">חזרה למערכת</a></div>
 <div id="status" class="card" style="margin-top:18px;display:none"></div>
 </div></section></main>
 <script>
 const $=id=>document.getElementById(id);
-async function json(url,options={}){const r=await fetch(url,{headers:{'Content-Type':'application/json'},...options});const d=await r.json();if(!r.ok)throw new Error(d.detail||'שגיאה');return d;}
-async function init(){const projects=await json('/api/projects');$('project').innerHTML=projects.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');const saved=Number(localStorage.getItem('filmOsProjectId'));if(saved)$('project').value=String(saved);}
-async function runImport(){if($('screenplay').value.trim().length<50)return alert('יש להדביק תסריט מלא.');if($('replace').checked&&!confirm('כל הסצנות והשוטים הקיימים בפרויקט יוחלפו. להמשיך?'))return;$('status').style.display='block';$('status').innerHTML='<h3>המערכת עובדת...</h3><p>OpenAI מפרק את כל התסריט לסצנות ולאחר מכן יוצר מפת שוטים לכל סצנה. הפעולה עשויה להימשך.</p>';try{const data=await json('/api/scenes/import-script',{method:'POST',body:JSON.stringify({project_id:Number($('project').value),screenplay:$('screenplay').value,replace_existing:$('replace').checked,generate_shot_maps:$('generate').checked,target_shots_per_minute:Number($('rate').value)})});$('status').innerHTML=`<h3>הייבוא הושלם</h3><p><b>${data.scenes_created}</b> סצנות נוצרו.</p><p><b>${data.shots_created}</b> שוטים נוצרו.</p><a href="/">פתיחת AI Film OS</a>`;}catch(e){$('status').innerHTML=`<h3>הייבוא נכשל</h3><p>${e.message}</p>`;}}
-init().catch(e=>alert(e.message));
+function escapeHtml(value){return String(value??'').replace(/[&<>'"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));}
+async function json(url,options={}){
+  let response;
+  try{
+    response=await fetch(url,{headers:{'Content-Type':'application/json'},...options});
+  }catch(error){
+    throw new Error('לא ניתן להגיע לשרת. בדקי את החיבור ונסי שוב.');
+  }
+  const text=await response.text();
+  let data=null;
+  if(text){
+    try{data=JSON.parse(text);}catch(_error){
+      const cleaned=text.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
+      const preview=cleaned.slice(0,240);
+      throw new Error(response.ok
+        ? 'השרת החזיר תשובה שאינה תקינה.'
+        : `השרת הפסיק את הפעולה לפני שהסתיימה${preview?`: ${preview}`:''}`);
+    }
+  }
+  if(!response.ok)throw new Error((data&&data.detail)||`שגיאת שרת ${response.status}`);
+  return data;
+}
+async function init(){
+  const projects=await json('/api/projects');
+  $('project').innerHTML=projects.map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+  const saved=Number(localStorage.getItem('filmOsProjectId'));
+  if(saved)$('project').value=String(saved);
+}
+function setProgress(title,message){
+  $('status').innerHTML=`<h3>${escapeHtml(title)}</h3><p>${escapeHtml(message)}</p>`;
+}
+async function runImport(){
+  if($('screenplay').value.trim().length<50)return alert('יש להדביק תסריט מלא.');
+  if($('replace').checked&&!confirm('כל הסצנות והשוטים הקיימים בפרויקט יוחלפו. להמשיך?'))return;
+  const button=$('importButton');
+  button.disabled=true;
+  $('status').style.display='block';
+  try{
+    setProgress('שלב 1 מתוך 2','OpenAI מפרק את התסריט לסצנות. אין לסגור את החלון.');
+    const shouldGenerate=$('generate').checked;
+    const data=await json('/api/scenes/import-script',{
+      method:'POST',
+      body:JSON.stringify({
+        project_id:Number($('project').value),
+        screenplay:$('screenplay').value,
+        replace_existing:$('replace').checked,
+        generate_shot_maps:false,
+        target_shots_per_minute:Number($('rate').value)
+      })
+    });
+    let shotsCreated=0;
+    const scenes=data.imported_scenes||[];
+    if(shouldGenerate){
+      for(let index=0;index<scenes.length;index++){
+        const scene=scenes[index];
+        const count=Number(scene.recommended_shot_count||6);
+        setProgress('שלב 2 מתוך 2',`יוצרת מפת שוטים לסצנה ${index+1} מתוך ${scenes.length} · ${count} שוטים`);
+        const createdScene=await json(`/api/scenes/${scene.id}/shot-map`,{
+          method:'POST',
+          body:JSON.stringify({shot_count:count,replace_existing:false})
+        });
+        shotsCreated+=(createdScene.shots||[]).length;
+      }
+    }
+    $('status').innerHTML=`<h3>הייבוא הושלם</h3><p><b>${data.scenes_created}</b> סצנות נוצרו.</p><p><b>${shotsCreated}</b> שוטים נוצרו.</p><a href="/">פתיחת AI Film OS</a>`;
+  }catch(error){
+    $('status').innerHTML=`<h3>הייבוא נכשל</h3><p>${escapeHtml(error.message)}</p><p>הסצנות שכבר נוצרו נשמרו. ניתן לנסות שוב את השלב שנכשל.</p>`;
+  }finally{
+    button.disabled=false;
+  }
+}
+init().catch(error=>alert(error.message));
 </script>
 </body></html>
