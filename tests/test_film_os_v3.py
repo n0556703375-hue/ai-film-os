@@ -149,6 +149,9 @@ class FilmOSV3Tests(unittest.TestCase):
         loaded = assets.get_asset(character["id"])
         self.assertEqual(loaded["reference_url"], reference["url"])
         self.assertEqual(len(loaded["reference_images"]), 1)
+        fetched = assets.get_reference_image(character["id"], reference["id"])
+        self.assertEqual(fetched["url"], reference["url"])
+        self.assertIsNone(assets.get_reference_image(character["id"], reference["id"] + 999))
 
         shot = shots.get_shot(1)
         shots.set_shot_assets(shot["id"], [character["id"]])
