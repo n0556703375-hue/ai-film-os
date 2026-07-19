@@ -110,6 +110,13 @@ class MediaResultCreate(BaseModel):
     notes: str = Field(default="", max_length=10000)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+class GenerationRequest(BaseModel):
+    media_type: Literal["text", "image", "video"]
+    instructions: str = Field(default="", max_length=5000)
+    size: Literal["1024x1024", "1536x1024", "1024x1536"] = "1536x1024"
+    quality: Literal["low", "medium", "high"] = "medium"
+
+
 class ContinuityIssueCreate(BaseModel):
     project_id: int = Field(default=1, ge=1)
     shot_id: int | None = None
