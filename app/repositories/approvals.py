@@ -5,6 +5,7 @@ from app.database.connection import get_connection
 
 APPROVED = "מאושר"
 REJECTED = "נדחה"
+BLOCKING_CONTINUITY_SEVERITIES = ("critical", "high")
 
 
 def _shot_status_for_media(conn, shot_id: int) -> str:
@@ -92,6 +93,21 @@ def decide_media(shot_id: int, media_id: int, decision: str, notes: str = ""):
     return get_pipeline(shot_id)
 
 
+def _blocking_continuity_issue(conn, shot_id: int):
+    placeholders = ",".join("?" for _ in BLOCKING_CONTINUITY_SEVERITIES)
+    return conn.execute(
+        f"""
+        SELECT severity, message FROM continuity_issues
+        WHERE shot_id=? AND severity IN ({placeholders})
+          AND COALESCE(status, CASE WHEN resolved=1 THEN 'נפתר' ELSE 'פתוח' END)
+              NOT IN ('נפתר','אושר כחריגה')
+        ORDER BY CASE severity WHEN 'critical' THEN 1 ELSE 2 END, id
+        LIMIT 1
+        """,
+        (shot_id, *BLOCKING_CONTINUITY_SEVERITIES),
+    ).fetchone()
+
+
 def finalize_shot(shot_id: int, notes: str = ""):
     with closing(get_connection()) as conn:
         shot = conn.execute("SELECT * FROM shots WHERE id=?", (shot_id,)).fetchone()
@@ -105,22 +121,14 @@ def finalize_shot(shot_id: int, notes: str = ""):
             "SELECT 1 FROM media_results WHERE shot_id=? AND media_type='video' AND status=? LIMIT 1",
             (shot_id, APPROVED),
         ).fetchone()
-        critical_open = conn.execute(
-            """
-            SELECT 1 FROM continuity_issues
-            WHERE shot_id=? AND severity='critical'
-              AND COALESCE(status, CASE WHEN resolved=1 THEN 'נפתר' ELSE 'פתוח' END)
-                  NOT IN ('נפתר','אושר כחריגה')
-            LIMIT 1
-            """,
-            (shot_id,),
-        ).fetchone()
+        blocking_issue = _blocking_continuity_issue(conn, shot_id)
         if not approved_image:
             raise ValueError("לא ניתן לסיים שוט ללא תמונה מאושרת.")
         if not approved_video:
             raise ValueError("לא ניתן לסיים שוט ללא וידאו מאושר.")
-        if critical_open:
-            raise ValueError("לא ניתן לסיים שוט עם בעיית רציפות קריטית פתוחה.")
+        if blocking_issue:
+            severity_label = "קריטית" if blocking_issue["severity"] == "critical" else "בחומרה גבוהה"
+            raise ValueError(f"לא ניתן לסיים שוט עם בעיית רציפות {severity_label} פתוחה.")
 
         conn.execute("UPDATE shots SET status='סופי',updated_at=CURRENT_TIMESTAMP WHERE id=?", (shot_id,))
         conn.execute(
