@@ -263,7 +263,7 @@ async function openShot(id) {
           </div>
           <div class="row">
             <button class="secondary" onclick="generateWithOpenAI(${shot.id}, 'text')">AI: שיפור פרומפט</button>
-            <button onclick="generateWithOpenAI(${shot.id}, 'image')">Magnific: יצירת תמונה</button>
+            <button onclick="generateWithOpenAI(${shot.id}, 'image')">Nano Banana Pro · 2K</button>
           </div>
         </div>
       </div>
@@ -410,7 +410,7 @@ async function generateWithOpenAI(id, mediaType) {
       })
     });
     if (data.media_type === "image") {
-      show(`<h2>Magnific יוצר את התמונה</h2>
+      show(`<h2>Nano Banana Pro יוצר תמונת 2K</h2>
         <p>המשימה נשלחה. המערכת תבדוק אוטומטית מתי התמונה מוכנה.</p>`);
       await waitForMagnific(id, data.task_id);
       return;
@@ -428,12 +428,12 @@ async function waitForMagnific(shotId, taskId) {
     try {
       const data = await api(`/api/generation/shots/${shotId}/magnific/${encodeURIComponent(taskId)}`);
       if (data.status === "COMPLETED" && data.media) {
-        show(`<h2>התמונה נוצרה ב־Magnific</h2>
+        show(`<h2>התמונה נוצרה ב־Nano Banana Pro · 2K</h2>
           <img src="${esc(data.media.url)}" alt="תוצאת שוט" style="max-width:100%;border-radius:12px">
           <div class="row"><button onclick="openShot(${shotId})">שמירה וחזרה לשוט</button></div>`);
         return;
       }
-      $("modalContent").innerHTML = `<h2>Magnific יוצר את התמונה</h2>
+      $("modalContent").innerHTML = `<h2>Nano Banana Pro יוצר תמונת 2K</h2>
         <p>סטטוס: ${esc(data.status)} · בדיקה ${attempt + 1}</p>`;
     } catch (error) {
       showError(error);
