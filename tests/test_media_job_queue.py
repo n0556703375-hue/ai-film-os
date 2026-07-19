@@ -79,6 +79,31 @@ class MediaJobQueueTests(unittest.TestCase):
         failed = jobs.fail_job(queued["id"], "permanent", retryable=True)
         self.assertEqual(failed["status"], "failed")
 
+    def test_failed_job_can_be_requeued_with_same_idempotency_key(self):
+        queued, _ = jobs.enqueue_job(
+            self.project_id, self.shot["id"], "image", {"prompt": "first"}, "shot-1-image-v3", max_attempts=1
+        )
+        jobs.claim_next_job("worker")
+        jobs.fail_job(queued["id"], "provider outage", retryable=True)
+
+        requeued, created = jobs.enqueue_job(
+            self.project_id, self.shot["id"], "image", {"prompt": "second"}, "shot-1-image-v3", max_attempts=2
+        )
+
+        self.assertTrue(created)
+        self.assertEqual(requeued["id"], queued["id"])
+        self.assertEqual(requeued["status"], "queued")
+        self.assertEqual(requeued["attempts"], 0)
+        self.assertEqual(requeued["max_attempts"], 2)
+        self.assertEqual(requeued["payload"]["prompt"], "second")
+        self.assertEqual(requeued["last_error"], "")
+
+    def test_enqueue_rejects_invalid_retry_budget(self):
+        with self.assertRaises(ValueError):
+            jobs.enqueue_job(
+                self.project_id, self.shot["id"], "image", {}, "shot-1-invalid", max_attempts=0
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
