@@ -20,12 +20,20 @@ def list_shots(project_id: int | None = None):
     return [dict(r) for r in rows]
 
 def _load_assets(conn, shot_id: int):
-    return conn.execute("""
+    rows = conn.execute("""
         SELECT a.* FROM assets a
         JOIN shot_assets sa ON sa.asset_id=a.id
         WHERE sa.shot_id=?
         ORDER BY a.asset_type,a.name
     """, (shot_id,)).fetchall()
+    result = []
+    for row in rows:
+        asset = dict(row)
+        refs = conn.execute("SELECT url FROM asset_reference_images WHERE asset_id=? ORDER BY id DESC",
+                            (asset["id"],)).fetchall()
+        asset["reference_images"] = [r["url"] for r in refs]
+        result.append(asset)
+    return result
 
 def get_shot(shot_id: int):
     with closing(get_connection()) as conn:
@@ -67,7 +75,7 @@ def get_shot(shot_id: int):
         """, (shot_id,)).fetchall()
 
     result = dict(shot)
-    result["assets"] = [dict(a) for a in assets]
+    result["assets"] = assets
     result["prompt_versions"] = [dict(v) for v in versions]
     result["media_results"] = [
         {**dict(item), "metadata": json.loads(item["metadata_json"] or "{}")}
@@ -75,7 +83,7 @@ def get_shot(shot_id: int):
     ]
     result["previous_shot"] = dict(previous) if previous else None
     if result["previous_shot"] is not None:
-        result["previous_shot"]["assets"] = [dict(a) for a in previous_assets]
+        result["previous_shot"]["assets"] = previous_assets
     return result
 
 def update_shot(shot_id: int, fields: dict):
