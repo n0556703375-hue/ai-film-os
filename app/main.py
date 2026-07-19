@@ -14,6 +14,7 @@ from app.api.dashboard import router as dashboard_router
 from app.api.issues import router as issues_router
 from app.api.generation import router as generation_router
 from app.api.approvals import router as approvals_router
+from app.api.jobs import router as jobs_router
 from app.core.config import settings
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -26,7 +27,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI Film OS",
-    version="3.6.0",
+    version="3.7.0",
     lifespan=lifespan,
 )
 
@@ -39,6 +40,7 @@ app.include_router(scenes_router)
 app.include_router(issues_router)
 app.include_router(generation_router)
 app.include_router(approvals_router)
+app.include_router(jobs_router)
 
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount("/generated", StaticFiles(directory=settings.generated_media_path), name="generated")
