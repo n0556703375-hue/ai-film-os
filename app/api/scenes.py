@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from app.models.schemas import SceneUpdate
+from app.models.schemas import SceneCreate, SceneUpdate
 from app.repositories import scenes as repo
 
 router = APIRouter(prefix="/api/scenes", tags=["scenes"])
@@ -7,6 +7,13 @@ router = APIRouter(prefix="/api/scenes", tags=["scenes"])
 @router.get("")
 def list_scenes():
     return repo.list_scenes()
+
+@router.post("")
+def create_scene(scene: SceneCreate):
+    try:
+        return repo.create_scene(scene.model_dump())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 @router.get("/{scene_id}")
 def get_scene(scene_id: int):

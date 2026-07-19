@@ -5,7 +5,8 @@ def list_scenes():
     with closing(get_connection()) as conn:
         rows = conn.execute("""
             SELECT sc.*,
-              (SELECT COUNT(*) FROM shots s WHERE s.scene_id=sc.id) AS shot_count
+              (SELECT COUNT(*) FROM shots s WHERE s.scene_id=sc.id) AS shot_count,
+              (SELECT COALESCE(SUM(duration_seconds),0) FROM shots s WHERE s.scene_id=sc.id) AS duration_seconds
             FROM scenes sc ORDER BY scene_number
         """).fetchall()
     return [dict(r) for r in rows]
@@ -30,8 +31,22 @@ def update_scene(scene_id: int, fields: dict):
             return None
         sets = ", ".join(f"{k}=?" for k in fields)
         conn.execute(
-            f"UPDATE scenes SET {sets} WHERE id=?",
+            f"UPDATE scenes SET {sets},updated_at=CURRENT_TIMESTAMP WHERE id=?",
             [*fields.values(), scene_id]
         )
         conn.commit()
     return get_scene(scene_id)
+
+def create_scene(data: dict):
+    data = dict(data)
+    with closing(get_connection()) as conn:
+        if not conn.execute("SELECT 1 FROM projects WHERE id=?", (data["project_id"],)).fetchone():
+            raise ValueError("הפרויקט אינו קיים.")
+        names = ",".join(data)
+        placeholders = ",".join("?" for _ in data)
+        cur = conn.execute(
+            f"INSERT INTO scenes ({names}) VALUES ({placeholders})",
+            list(data.values()),
+        )
+        conn.commit()
+    return get_scene(cur.lastrowid)

@@ -21,7 +21,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI Film OS",
-    version="3.3.0",
+    version="3.4.0",
     lifespan=lifespan,
 )
 

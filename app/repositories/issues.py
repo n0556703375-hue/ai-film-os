@@ -39,8 +39,8 @@ def replace_shot_issues(shot_id: int, issues: list[dict]):
 
         conn.executemany("""
             INSERT INTO continuity_issues
-            (project_id,shot_id,severity,category,message)
-            VALUES (?,?,?,?,?)
+            (project_id,shot_id,severity,category,message,status)
+            VALUES (?,?,?,?,?,?)
         """, [
             (
                 project_id,
@@ -48,6 +48,7 @@ def replace_shot_issues(shot_id: int, issues: list[dict]):
                 issue.get("severity", "medium"),
                 issue.get("category", "general"),
                 issue.get("message", ""),
+                "פתוח",
             )
             for issue in issues
         ])
@@ -58,9 +59,10 @@ def resolve_issue(issue_id: int, resolved: bool):
         cur = conn.execute("""
             UPDATE continuity_issues
             SET resolved=?,
+                status=CASE WHEN ?=1 THEN 'נפתר' ELSE 'פתוח' END,
                 resolved_at=CASE WHEN ?=1 THEN CURRENT_TIMESTAMP ELSE NULL END
             WHERE id=?
-        """, (int(resolved), int(resolved), issue_id))
+        """, (int(resolved), int(resolved), int(resolved), issue_id))
         conn.commit()
     return cur.rowcount > 0
 
@@ -69,3 +71,38 @@ def clear_resolved():
         cur = conn.execute("DELETE FROM continuity_issues WHERE resolved=1")
         conn.commit()
     return cur.rowcount
+
+def create_issue(data: dict):
+    data = dict(data)
+    data["resolved"] = int(data.get("status") == "נפתר")
+    with closing(get_connection()) as conn:
+        cur = conn.execute("""
+            INSERT INTO continuity_issues
+            (project_id,shot_id,asset_id,severity,category,message,status,expected,observed,resolution,resolved)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            data["project_id"], data.get("shot_id"), data.get("asset_id"),
+            data.get("severity", "medium"), data["category"], data["message"],
+            data.get("status", "פתוח"), data.get("expected", ""),
+            data.get("observed", ""), data.get("resolution", ""), data["resolved"],
+        ))
+        conn.commit()
+        row = conn.execute("SELECT * FROM continuity_issues WHERE id=?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
+def update_issue(issue_id: int, fields: dict):
+    fields = dict(fields)
+    if "status" in fields:
+        fields["resolved"] = int(fields["status"] == "נפתר")
+        fields["resolved_at"] = None
+    with closing(get_connection()) as conn:
+        if not conn.execute("SELECT 1 FROM continuity_issues WHERE id=?", (issue_id,)).fetchone():
+            return None
+        sets = ", ".join(f"{key}=?" for key in fields)
+        conn.execute(
+            f"UPDATE continuity_issues SET {sets},updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            [*fields.values(), issue_id],
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM continuity_issues WHERE id=?", (issue_id,)).fetchone()
+    return dict(row)

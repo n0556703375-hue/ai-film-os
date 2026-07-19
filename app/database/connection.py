@@ -14,11 +14,42 @@ def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return any(row["name"] == column for row in rows)
 
+def _add_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    for name, definition in columns.items():
+        if not _column_exists(conn, table, name):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
 def migrate_database(conn: sqlite3.Connection) -> None:
-    if not _column_exists(conn, "shots", "shot_type"):
-        conn.execute(
-            "ALTER TABLE shots ADD COLUMN shot_type TEXT NOT NULL DEFAULT 'רגיל'"
-        )
+    _add_columns(conn, "shots", {
+        "shot_type": "TEXT NOT NULL DEFAULT 'רגיל'",
+        "duration_seconds": "REAL",
+        "camera_angle": "TEXT NOT NULL DEFAULT ''",
+        "composition": "TEXT NOT NULL DEFAULT ''",
+        "action": "TEXT NOT NULL DEFAULT ''",
+        "color_palette": "TEXT NOT NULL DEFAULT ''",
+        "audio": "TEXT NOT NULL DEFAULT ''",
+        "negative_prompt": "TEXT NOT NULL DEFAULT ''",
+    })
+    _add_columns(conn, "scenes", {
+        "status": "TEXT NOT NULL DEFAULT 'מתוכנן'",
+        "updated_at": "TEXT NOT NULL DEFAULT ''",
+    })
+    _add_columns(conn, "prompt_versions", {
+        "negative_prompt": "TEXT NOT NULL DEFAULT ''",
+        "source": "TEXT NOT NULL DEFAULT 'manual'",
+    })
+    _add_columns(conn, "continuity_issues", {
+        "status": "TEXT NOT NULL DEFAULT 'פתוח'",
+        "expected": "TEXT NOT NULL DEFAULT ''",
+        "observed": "TEXT NOT NULL DEFAULT ''",
+        "resolution": "TEXT NOT NULL DEFAULT ''",
+        "updated_at": "TEXT NOT NULL DEFAULT ''",
+    })
+    conn.execute("""
+        UPDATE continuity_issues
+        SET status=CASE WHEN resolved=1 THEN 'נפתר' ELSE 'פתוח' END
+        WHERE status='' OR status IS NULL
+    """)
 
 def init_db() -> None:
     with closing(get_connection()) as conn:

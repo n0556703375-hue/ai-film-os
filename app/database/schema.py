@@ -92,4 +92,22 @@ CREATE TABLE IF NOT EXISTS prompt_versions (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(shot_id) REFERENCES shots(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS media_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shot_id INTEGER NOT NULL,
+    media_type TEXT NOT NULL CHECK(media_type IN ('image', 'video')),
+    version INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    prompt_version_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'טיוטה',
+    notes TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(shot_id, media_type, version),
+    FOREIGN KEY(shot_id) REFERENCES shots(id) ON DELETE CASCADE,
+    FOREIGN KEY(prompt_version_id) REFERENCES prompt_versions(id) ON DELETE SET NULL
+);
 """
