@@ -120,7 +120,7 @@ class MediaWorkerTests(unittest.TestCase):
             self.project_id,
             self.shot["id"],
             "video",
-            {"audio_mode": "none", "aspect_ratio": "16:9"},
+            {"audio_mode": "none", "aspect_ratio": "16:9", "model_hint": "auto"},
             "worker-video-success",
         )
 
@@ -128,15 +128,19 @@ class MediaWorkerTests(unittest.TestCase):
 
         self.assertEqual(completed["status"], "completed")
         self.assertEqual(completed["actual_cost_usd"], 0.42)
+        self.assertEqual(completed["result"]["model_profile"], "cinematic")
         media = shots.list_media_results(self.shot["id"])
         video = next(item for item in media if item["media_type"] == "video")
         self.assertEqual(video["url"], "https://example.com/result.mp4")
         self.assertEqual(video["metadata"]["provider_task_id"], "video-task-1")
+        self.assertEqual(video["metadata"]["model_profile"], "cinematic")
+        self.assertIn("balanced default", video["metadata"]["model_selection_reason"])
         self.assertEqual(shots.get_shot(self.shot["id"])["status"], "וידאו טיוטה")
         request = provider.generate.call_args.args[0]
         self.assertEqual(request.image_url, "https://example.com/approved.jpg")
         self.assertEqual(request.duration_seconds, 6)
         self.assertEqual(request.camera_motion, "slow push in")
+        self.assertEqual(request.model_profile, "cinematic")
 
     def test_empty_queue_returns_none(self):
         self.assertIsNone(process_one_job("test-worker"))
