@@ -14,6 +14,7 @@ class VideoGenerationRequest:
     camera_motion: str = ""
     audio_mode: str = "none"
     aspect_ratio: str = "16:9"
+    model_profile: str = "cinematic"
 
 
 @dataclass(frozen=True)
