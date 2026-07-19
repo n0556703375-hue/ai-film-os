@@ -14,6 +14,7 @@ class JobCreateRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str = Field(min_length=8, max_length=300)
     max_attempts: int = Field(default=3, ge=1, le=10)
+    estimated_cost_usd: float = Field(default=0, ge=0)
 
 
 class JobFailureRequest(BaseModel):
@@ -23,11 +24,17 @@ class JobFailureRequest(BaseModel):
 
 class JobCompleteRequest(BaseModel):
     result: dict[str, Any] = Field(default_factory=dict)
+    actual_cost_usd: float = Field(default=0, ge=0)
 
 
 @router.get("")
 def list_jobs(project_id: int | None = None, shot_id: int | None = None):
     return repo.list_jobs(project_id, shot_id)
+
+
+@router.get("/cost-summary")
+def cost_summary(project_id: int = Field(ge=1)):
+    return repo.get_cost_summary(project_id)
 
 
 @router.get("/{job_id}")
@@ -48,6 +55,7 @@ def enqueue_job(request: JobCreateRequest):
             request.payload,
             request.idempotency_key,
             request.max_attempts,
+            request.estimated_cost_usd,
         )
     except ValueError as exc:
         raise HTTPException(409, str(exc))
@@ -61,7 +69,10 @@ def claim_job(worker_id: str = "web-worker"):
 
 @router.post("/{job_id}/complete")
 def complete_job(job_id: int, request: JobCompleteRequest):
-    job = repo.complete_job(job_id, request.result)
+    try:
+        job = repo.complete_job(job_id, request.result, request.actual_cost_usd)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
     if not job:
         raise HTTPException(404, "המשימה לא נמצאה.")
     return job
