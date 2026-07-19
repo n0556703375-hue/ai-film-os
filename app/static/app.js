@@ -521,9 +521,43 @@ async function openAsset(id) {
   ${asset.reference_url?`<img src="${esc(asset.reference_url)}" alt="רפרנס ${esc(asset.name)}" style="width:100%;max-height:320px;object-fit:contain;border-radius:10px;margin-top:10px">`:""}
   <label class="asset-check"><input type="checkbox" id="asApproved" ${asset.approved?"checked":""}><span>נכס מאושר</span></label>
   <div class="row"><button onclick="saveAsset(${asset.id})">שמירה</button><button class="danger" onclick="deleteAsset(${asset.id})">מחיקה</button></div>
-  </div><div class="workspace-section"><h3>שוטים מקושרים</h3>
+  </div><div>
+  ${asset.asset_type==="דמות"?`<div class="workspace-section"><h3>יצירת רפרנסים ב־Magnific</h3>
+  <p class="meta">OpenAI יבנה פרומפט זהות ו־Nano Banana Pro ייצור רפרנס 2K.</p>
+  <div class="row"><button onclick="generateCharacterReference(${asset.id},'portrait')">Portrait</button>
+  <button onclick="generateCharacterReference(${asset.id},'full_body')">גוף מלא</button>
+  <button onclick="generateCharacterReference(${asset.id},'three_quarter')">זווית ¾</button></div>
+  <div class="reference-grid">${(asset.reference_images||[]).length?asset.reference_images.map((r)=>`
+    <div class="card"><img src="${esc(r.url)}" alt="${esc(r.view_type)}" style="width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:10px">
+    <div class="meta">${esc(r.view_type)} · ${esc(r.model)}</div></div>`).join(""):"<p>טרם נוצרו רפרנסים.</p>"}</div>
+  </div>`:""}
+  <div class="workspace-section" style="margin-top:15px"><h3>שוטים מקושרים</h3>
   ${asset.linked_shots.length?asset.linked_shots.map((s)=>`<div class="card"><div class="title">שוט ${s.shot_number}: ${esc(s.title)}</div><button onclick="openShot(${s.id})">פתיחת השוט</button></div>`).join(""):"<p>הנכס אינו משויך עדיין לשוטים.</p>"}
-  </div></div>`);
+  </div></div></div>`);
+}
+
+async function generateCharacterReference(assetId, viewType) {
+  if (!confirm("ליצור רפרנס דמות חדש ב־Magnific? הפעולה משתמשת בקרדיט API.")) return;
+  show("<h2>יוצר רפרנס דמות</h2><p>OpenAI מכין פרומפט זהות ו־Magnific מתחיל יצירת 2K…</p>");
+  try {
+    const task=await api(`/api/generation/assets/${assetId}/references`,{method:"POST",body:JSON.stringify({view_type:viewType,instructions:""})});
+    await waitForCharacterReference(assetId,task.task_id,viewType);
+  } catch(error){showError(error);}
+}
+
+async function waitForCharacterReference(assetId, taskId, viewType) {
+  for (let attempt=0;attempt<100;attempt+=1) {
+    await new Promise((resolve)=>setTimeout(resolve,3000));
+    try {
+      const data=await api(`/api/generation/assets/${assetId}/references/${encodeURIComponent(taskId)}?view_type=${encodeURIComponent(viewType)}`);
+      if(data.status==="COMPLETED"&&data.reference){
+        show(`<h2>רפרנס הדמות מוכן</h2><img src="${esc(data.reference.url)}" alt="רפרנס דמות" style="max-width:100%;max-height:65vh;border-radius:12px"><button onclick="openAsset(${assetId})">שמירה וחזרה לדמות</button>`);
+        return;
+      }
+      $("modalContent").innerHTML=`<h2>Magnific יוצר רפרנס 2K</h2><p>סטטוס: ${esc(data.status)} · בדיקה ${attempt+1}</p>`;
+    } catch(error){showError(error);return;}
+  }
+  show(`<h2>הרפרנס עדיין בתהליך</h2><button onclick="openAsset(${assetId})">חזרה לדמות</button>`);
 }
 async function saveAsset(id) {
   const payload={asset_type:$("asType").value,name:$("asName").value,description:$("asDescription").value,
