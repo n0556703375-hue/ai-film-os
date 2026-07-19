@@ -136,6 +136,25 @@ class FilmOSV3Tests(unittest.TestCase):
         self.assertGreaterEqual(len(scenes.list_scenes()), 6)
         self.assertGreaterEqual(len(shots.list_shots()), 21)
 
+    def test_character_reference_gallery_flows_into_linked_shot(self):
+        character = assets.create_asset({
+            "project_id": 1, "asset_type": "דמות", "name": "דמות בדיקה",
+            "description": "דמות לסרט", "approved": True,
+        })
+        reference = assets.create_reference_image(character["id"], {
+            "view_type": "portrait", "url": "https://example.com/portrait.png",
+            "prompt": "identity portrait", "metadata": {"magnific_task_id": "task-1"},
+        })
+        self.assertEqual(reference["view_type"], "portrait")
+        loaded = assets.get_asset(character["id"])
+        self.assertEqual(loaded["reference_url"], reference["url"])
+        self.assertEqual(len(loaded["reference_images"]), 1)
+
+        shot = shots.get_shot(1)
+        shots.set_shot_assets(shot["id"], [character["id"]])
+        linked = shots.get_shot(shot["id"])
+        self.assertEqual(linked["assets"][0]["reference_images"], [reference["url"]])
+
 
 if __name__ == "__main__":
     unittest.main()
