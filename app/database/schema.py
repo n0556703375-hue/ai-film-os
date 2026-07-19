@@ -140,4 +140,26 @@ CREATE TABLE IF NOT EXISTS approval_events (
     FOREIGN KEY(shot_id) REFERENCES shots(id) ON DELETE CASCADE,
     FOREIGN KEY(media_result_id) REFERENCES media_results(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS media_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    shot_id INTEGER NOT NULL,
+    job_type TEXT NOT NULL CHECK(job_type IN ('image','video')),
+    status TEXT NOT NULL DEFAULT 'queued',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    result_json TEXT NOT NULL DEFAULT '{}',
+    idempotency_key TEXT NOT NULL UNIQUE,
+    priority INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    worker_id TEXT NOT NULL DEFAULT '',
+    last_error TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    finished_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY(shot_id) REFERENCES shots(id) ON DELETE CASCADE
+);
 """
