@@ -59,7 +59,7 @@ class ShotApprovalPipelineTests(unittest.TestCase):
 
     def test_approval_progresses_and_finalizes_shot(self):
         pipeline = approvals.decide_media(self.shot["id"], self.image["id"], "approve", "image ok")
-        self.assertEqual(pipeline["status"], "תמונה מאושרת")
+        self.assertEqual(pipeline["status"], "וידאו טיוטה")
 
         pipeline = approvals.decide_media(self.shot["id"], self.video["id"], "approve", "video ok")
         self.assertEqual(pipeline["status"], "וידאו מאושר")
@@ -71,7 +71,7 @@ class ShotApprovalPipelineTests(unittest.TestCase):
     def test_rejecting_approved_media_rolls_pipeline_back(self):
         approvals.decide_media(self.shot["id"], self.image["id"], "approve")
         pipeline = approvals.decide_media(self.shot["id"], self.image["id"], "reject", "redo")
-        self.assertEqual(pipeline["status"], "וידאו טיוטה")
+        self.assertEqual(pipeline["status"], "תמונת טיוטה")
         image = next(item for item in pipeline["media_results"] if item["id"] == self.image["id"])
         self.assertEqual(image["status"], "נדחה")
 
