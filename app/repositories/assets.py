@@ -53,6 +53,16 @@ def create_reference_image(asset_id: int, data: dict):
         row = conn.execute("SELECT * FROM asset_reference_images WHERE id=?", (cur.lastrowid,)).fetchone()
     return {**dict(row), "metadata": json.loads(row["metadata_json"] or "{}")}
 
+def get_reference_image(asset_id: int, reference_id: int):
+    with closing(get_connection()) as conn:
+        row = conn.execute(
+            "SELECT * FROM asset_reference_images WHERE id=? AND asset_id=?",
+            (reference_id, asset_id),
+        ).fetchone()
+    if not row:
+        return None
+    return {**dict(row), "metadata": json.loads(row["metadata_json"] or "{}")}
+
 def create_asset(data: dict):
     data = dict(data)
     data["approved"] = int(data.get("approved", False))

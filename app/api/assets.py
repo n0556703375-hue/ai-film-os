@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException
+import httpx
+from fastapi import APIRouter, HTTPException, Response
 from app.models.schemas import AssetCreate, AssetUpdate
 from app.repositories import assets as repo
 
@@ -14,6 +15,31 @@ def get_asset(asset_id: int):
     if not asset:
         raise HTTPException(404, "הנכס לא נמצא.")
     return asset
+
+@router.get("/{asset_id}/references/{reference_id}/image")
+def reference_image(asset_id: int, reference_id: int):
+    reference = repo.get_reference_image(asset_id, reference_id)
+    if not reference:
+        raise HTTPException(404, "תמונת הרפרנס לא נמצאה.")
+    url = reference["url"]
+    if not url.startswith("https://"):
+        raise HTTPException(400, "כתובת תמונת הרפרנס אינה מאובטחת.")
+    try:
+        with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+            upstream = client.get(url, headers={"Accept": "image/*", "User-Agent": "AI-Film-OS/1.0"})
+        upstream.raise_for_status()
+        content_type = upstream.headers.get("content-type", "image/jpeg").split(";")[0]
+        if not content_type.startswith("image/"):
+            raise HTTPException(502, "מקור הרפרנס לא החזיר קובץ תמונה.")
+        return Response(
+            content=upstream.content,
+            media_type=content_type,
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, f"טעינת תמונת הרפרנס נכשלה: {exc}")
 
 @router.post("")
 def create_asset(asset: AssetCreate):

@@ -528,8 +528,8 @@ async function openAsset(id) {
   <button onclick="generateCharacterReference(${asset.id},'full_body')">גוף מלא</button>
   <button onclick="generateCharacterReference(${asset.id},'three_quarter')">זווית ¾</button></div>
   <div class="reference-grid">${(asset.reference_images||[]).length?asset.reference_images.map((r)=>`
-    <div class="card"><img src="${esc(r.url)}" alt="${esc(r.view_type)}" style="width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:10px">
-    <div class="meta">${esc(r.view_type)} · ${esc(r.model)}</div></div>`).join(""):"<p>טרם נוצרו רפרנסים.</p>"}</div>
+    <div class="card"><img src="/api/assets/${asset.id}/references/${r.id}/image" alt="${esc(r.view_type)}" style="width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:10px" onerror="this.classList.add('image-error')">
+    <div class="meta">${esc(r.view_type)} · ${esc(r.model)}</div><a href="/api/assets/${asset.id}/references/${r.id}/image" target="_blank" rel="noopener">פתיחת התמונה</a></div>`).join(""):"<p>טרם נוצרו רפרנסים.</p>"}</div>
   </div>`:""}
   <div class="workspace-section" style="margin-top:15px"><h3>שוטים מקושרים</h3>
   ${asset.linked_shots.length?asset.linked_shots.map((s)=>`<div class="card"><div class="title">שוט ${s.shot_number}: ${esc(s.title)}</div><button onclick="openShot(${s.id})">פתיחת השוט</button></div>`).join(""):"<p>הנכס אינו משויך עדיין לשוטים.</p>"}
@@ -551,7 +551,8 @@ async function waitForCharacterReference(assetId, taskId, viewType) {
     try {
       const data=await api(`/api/generation/assets/${assetId}/references/${encodeURIComponent(taskId)}?view_type=${encodeURIComponent(viewType)}`);
       if(data.status==="COMPLETED"&&data.reference){
-        show(`<h2>רפרנס הדמות מוכן</h2><img src="${esc(data.reference.url)}" alt="רפרנס דמות" style="max-width:100%;max-height:65vh;border-radius:12px"><button onclick="openAsset(${assetId})">שמירה וחזרה לדמות</button>`);
+        const imageUrl=`/api/assets/${assetId}/references/${data.reference.id}/image`;
+        show(`<h2>רפרנס הדמות מוכן</h2><img src="${imageUrl}" alt="רפרנס דמות" style="max-width:100%;max-height:65vh;border-radius:12px"><div class="row"><a href="${imageUrl}" target="_blank" rel="noopener">פתיחת התמונה</a><button onclick="openAsset(${assetId})">שמירה וחזרה לדמות</button></div>`);
         return;
       }
       $("modalContent").innerHTML=`<h2>Magnific יוצר רפרנס 2K</h2><p>סטטוס: ${esc(data.status)} · בדיקה ${attempt+1}</p>`;
