@@ -16,6 +16,7 @@ from app.api.generation import router as generation_router
 from app.api.approvals import router as approvals_router
 from app.api.jobs import router as jobs_router
 from app.core.config import settings
+from app.core.version import APP_VERSION
 
 BASE_DIR = Path(__file__).resolve().parent
 settings.generated_media_path.mkdir(parents=True, exist_ok=True)
@@ -27,7 +28,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI Film OS",
-    version="3.7.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
