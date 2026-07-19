@@ -1,6 +1,5 @@
 import json
 from contextlib import closing
-from datetime import datetime, timezone
 
 from app.database.connection import get_connection
 
@@ -11,6 +10,8 @@ TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 def enqueue_job(project_id: int, shot_id: int, job_type: str, payload: dict, idempotency_key: str, max_attempts: int = 3):
     if job_type not in {"image", "video"}:
         raise ValueError("סוג משימת המדיה אינו תקין.")
+    if max_attempts < 1:
+        raise ValueError("מספר הניסיונות חייב להיות לפחות 1.")
     with closing(get_connection()) as conn:
         if not conn.execute("SELECT 1 FROM shots WHERE id=? AND project_id=?", (shot_id, project_id)).fetchone():
             raise ValueError("השוט אינו שייך לפרויקט.")
@@ -20,13 +21,27 @@ def enqueue_job(project_id: int, shot_id: int, job_type: str, payload: dict, ide
         ).fetchone()
         if existing and existing["status"] in ACTIVE_STATUSES | {"completed"}:
             return _decode(existing), False
+        encoded_payload = json.dumps(payload, ensure_ascii=False)
+        if existing:
+            conn.execute(
+                """
+                UPDATE media_jobs
+                SET project_id=?,shot_id=?,job_type=?,status='queued',payload_json=?,result_json='{}',
+                    max_attempts=?,attempts=0,worker_id='',last_error='',started_at=NULL,finished_at=NULL,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+                """,
+                (project_id, shot_id, job_type, encoded_payload, max_attempts, existing["id"]),
+            )
+            conn.commit()
+            return get_job(existing["id"]), True
         cur = conn.execute(
             """
             INSERT INTO media_jobs
             (project_id,shot_id,job_type,status,payload_json,idempotency_key,max_attempts)
             VALUES (?,?,?,'queued',?,?,?)
             """,
-            (project_id, shot_id, job_type, json.dumps(payload, ensure_ascii=False), idempotency_key, max_attempts),
+            (project_id, shot_id, job_type, encoded_payload, idempotency_key, max_attempts),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM media_jobs WHERE id=?", (cur.lastrowid,)).fetchone()
