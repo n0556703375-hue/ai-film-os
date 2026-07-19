@@ -2,8 +2,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 ShotStatus = Literal[
-    "מתוכנן", "רפרנס", "פרומפט מוכן", "תמונה מאושרת",
-    "וידאו מוכן", "וידאו מאושר", "אודיו", "QA", "סופי"
+    "מתוכנן", "פרומפט מוכן", "תמונת טיוטה", "תמונה מאושרת",
+    "וידאו טיוטה", "וידאו מאושר", "QA", "סופי",
+    "רפרנס", "וידאו מוכן", "אודיו"
 ]
 
 ShotType = Literal[
@@ -124,6 +125,13 @@ class MediaResultCreate(BaseModel):
     status: str = Field(default="טיוטה", max_length=100)
     notes: str = Field(default="", max_length=10000)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+class MediaDecisionRequest(BaseModel):
+    decision: Literal["approve", "reject"]
+    notes: str = Field(default="", max_length=5000)
+
+class ShotFinalizeRequest(BaseModel):
+    notes: str = Field(default="", max_length=5000)
 
 class GenerationRequest(BaseModel):
     media_type: Literal["text", "image", "video"]
