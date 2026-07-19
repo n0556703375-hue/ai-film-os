@@ -47,8 +47,8 @@ function showVideoGenerationForm(shotId) {
     <div class="form-grid">
       <div><label>משך בשניות</label><input id="videoDuration" type="number" min="1" max="30" step="0.5" value="5"></div>
       <div><label>יחס תמונה</label><select id="videoAspect"><option>16:9</option><option>9:16</option><option>1:1</option></select></div>
-      <div><label>מצב אודיו</label><select id="videoAudio"><option value="none">ללא</option><option value="ambience">אווירה</option><option value="dialogue">דיאלוג</option><option value="music">מוזיקה</option></select></div>
-      <div><label>העדפת מודל</label><select id="videoModel"><option value="auto">אוטומטי</option><option value="cinematic">קולנועי</option><option value="fast">מהיר</option><option value="high_quality">איכות גבוהה</option></select></div>
+      <div><label>מצב אודיו</label><select id="videoAudio"><option value="none">ללא</option><option value="ambient">אווירה</option><option value="dialogue">דיאלוג</option><option value="music">מוזיקה</option></select></div>
+      <div><label>העדפת מודל</label><select id="videoModel"><option value="auto">אוטומטי</option><option value="cinematic">קולנועי</option><option value="fast">מהיר</option><option value="high_fidelity">איכות גבוהה</option></select></div>
       <div class="wide"><label>תנועת מצלמה</label><textarea id="videoMotion" placeholder="למשל: slow dolly in, subtle handheld"></textarea></div>
       <div class="wide"><label>הוראות נוספות</label><textarea id="videoInstructions" placeholder="שמירת זהות, תנועה רצויה, מגבלות רציפות"></textarea></div>
     </div>
@@ -59,7 +59,7 @@ function showVideoGenerationForm(shotId) {
 async function queueVideoGeneration(shotId) {
   if (!confirm("להוסיף יצירת וידאו לתור? לאחר חיבור ספק הפעולה עשויה להשתמש בקרדיט API.")) return;
   try {
-    const data = await api(`/api/generation/shots/${shotId}/video/queue`, {
+    const data = await api(`/api/video-generation/shots/${shotId}/queue`, {
       method: "POST",
       body: JSON.stringify({
         duration_seconds: Number($("videoDuration").value),
