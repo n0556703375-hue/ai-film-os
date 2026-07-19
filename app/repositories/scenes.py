@@ -1,6 +1,35 @@
 from contextlib import closing
 from app.database.connection import get_connection
 
+def create_generated_shots(scene_id: int, shots: list[dict], replace_existing: bool = False):
+    allowed = {"title", "shot_type", "duration_seconds", "action", "camera", "camera_angle",
+               "composition", "lens", "lighting", "movement", "mood", "color_palette", "dialogue"}
+    with closing(get_connection()) as conn:
+        scene = conn.execute("SELECT * FROM scenes WHERE id=?", (scene_id,)).fetchone()
+        if not scene:
+            return None
+        existing = conn.execute("SELECT COUNT(*) FROM shots WHERE scene_id=?", (scene_id,)).fetchone()[0]
+        if existing and not replace_existing:
+            raise ValueError("כבר קיימים שוטים בסצנה. יש לבחור החלפה מפורשת.")
+        if replace_existing:
+            conn.execute("DELETE FROM shots WHERE scene_id=?", (scene_id,))
+        valid_assets = {row[0] for row in conn.execute(
+            "SELECT id FROM assets WHERE project_id=?", (scene["project_id"],)
+        ).fetchall()}
+        for number, shot in enumerate(shots, 1):
+            fields = {key: shot.get(key) for key in allowed if shot.get(key) is not None}
+            fields.update({"project_id": scene["project_id"], "scene_id": scene_id,
+                           "shot_number": number, "status": "מתוכנן",
+                           "title": shot.get("title") or f"שוט {number}"})
+            names = ",".join(fields)
+            cur = conn.execute(f"INSERT INTO shots ({names}) VALUES ({','.join('?' for _ in fields)})",
+                               list(fields.values()))
+            ids = [int(v) for v in shot.get("asset_ids", []) if int(v) in valid_assets]
+            conn.executemany("INSERT OR IGNORE INTO shot_assets (shot_id,asset_id) VALUES (?,?)",
+                             [(cur.lastrowid, asset_id) for asset_id in ids])
+        conn.commit()
+    return get_scene(scene_id)
+
 def list_scenes(project_id: int | None = None):
     query = """
         SELECT sc.*,
