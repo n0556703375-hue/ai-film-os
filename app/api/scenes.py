@@ -6,6 +6,7 @@ from app.repositories import projects as project_repo
 from app.repositories import shots as shot_repo
 from app.services.generation import GenerationNotConfigured
 from app.services.prompt_builder import build_prompt
+from app.services.scene_assembly import build_scene_preview_manifest
 from app.services.shot_map import generate_shot_map
 from app.services.screenplay_breakdown import breakdown_screenplay
 
@@ -64,6 +65,14 @@ def import_script(request: ScriptImportRequest):
         raise HTTPException(409, str(exc))
     except Exception as exc:
         raise HTTPException(502, f"ייבוא התסריט נכשל: {exc}")
+
+
+@router.get("/{scene_id}/preview-manifest")
+def get_scene_preview_manifest(scene_id: int):
+    manifest = build_scene_preview_manifest(scene_id)
+    if not manifest:
+        raise HTTPException(404, "הסצנה לא נמצאה.")
+    return manifest
 
 
 @router.get("/{scene_id}")
