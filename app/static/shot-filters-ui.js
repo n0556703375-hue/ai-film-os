@@ -1,4 +1,5 @@
 let shotFilterState = { status: "", scene: "", query: "" };
+let selectedShotIds = new Set();
 
 window.loadShots = async function loadShotsWithFilters() {
   const shots = await api("/api/shots");
@@ -11,9 +12,10 @@ window.loadShots = async function loadShotsWithFilters() {
     const matchesQuery = !shotFilterState.query || haystack.includes(shotFilterState.query.toLowerCase());
     return matchesStatus && matchesScene && matchesQuery;
   });
+  selectedShotIds = new Set([...selectedShotIds].filter((id) => shots.some((shot) => Number(shot.id) === id)));
 
   $("shots").innerHTML = `<div class="section-toolbar">
-      <div><h2>שוטים</h2><div class="meta">${filtered.length} מתוך ${shots.length} שוטים</div></div>
+      <div><h2>שוטים</h2><div class="meta">${filtered.length} מתוך ${shots.length} שוטים · ${selectedShotIds.size} נבחרו</div></div>
       <button onclick="newShot()">שוט חדש</button>
     </div>
     <div class="card" data-shot-filters>
@@ -23,20 +25,61 @@ window.loadShots = async function loadShotsWithFilters() {
         <div><label>סצנה</label><select id="shotFilterScene" onchange="updateShotFilters()"><option value="">כל הסצנות</option>${scenes.map((scene) => `<option value="${esc(scene)}" ${String(scene) === shotFilterState.scene ? "selected" : ""}>סצנה ${esc(scene)}</option>`).join("")}</select></div>
         <div><label>&nbsp;</label><button class="secondary" onclick="clearShotFilters()">ניקוי מסננים</button></div>
       </div>
+      <div class="row" data-shot-batch-actions>
+        <button class="secondary" onclick="selectVisibleShots([${filtered.map((shot) => Number(shot.id)).join(",")}])">בחירת המוצגים</button>
+        <button class="secondary" onclick="clearShotSelection()">ניקוי בחירה</button>
+        <select id="batchShotStatus"><option value="מתוכנן">מתוכנן</option><option value="פרומפט מוכן">פרומפט מוכן</option></select>
+        <button onclick="applyBatchShotStatus()" ${selectedShotIds.size ? "" : "disabled"}>עדכון ${selectedShotIds.size} שוטים</button>
+      </div>
     </div>
     <div class="grid">${filtered.length ? filtered.map(renderFilteredShotCard).join("") : `<div class="card"><b>לא נמצאו שוטים תואמים</b><p class="meta">שני את המסננים כדי להציג תוצאות נוספות.</p></div>`}</div>`;
 };
 
 function renderFilteredShotCard(shot) {
+  const id = Number(shot.id);
   return `<div class="card">
+    <label class="row"><input type="checkbox" data-shot-select value="${id}" ${selectedShotIds.has(id) ? "checked" : ""} onchange="toggleShotSelection(${id}, this.checked)"> בחירת השוט</label>
     <div class="meta">שוט ${shot.shot_number} · ${esc(shot.shot_type || "רגיל")} · סצנה ${shot.scene_number || "-"} · ${shot.asset_count} נכסים</div>
     <div class="title">${esc(shot.title)}</div>
     <span class="badge">${esc(shot.status)}</span>
     <div class="row">
-      <button onclick="openShot(${Number(shot.id)})">פתיחת Workspace</button>
-      <button class="secondary" onclick="checkContinuity(${Number(shot.id)})">בדיקת רציפות</button>
+      <button onclick="openShot(${id})">פתיחת Workspace</button>
+      <button class="secondary" onclick="checkContinuity(${id})">בדיקת רציפות</button>
     </div>
   </div>`;
+}
+
+function toggleShotSelection(id, checked) {
+  if (checked) selectedShotIds.add(Number(id));
+  else selectedShotIds.delete(Number(id));
+  loadShots().catch(showError);
+}
+
+function selectVisibleShots(ids) {
+  ids.forEach((id) => selectedShotIds.add(Number(id)));
+  loadShots().catch(showError);
+}
+
+function clearShotSelection() {
+  selectedShotIds.clear();
+  loadShots().catch(showError);
+}
+
+async function applyBatchShotStatus() {
+  if (!selectedShotIds.size) return alert("יש לבחור לפחות שוט אחד.");
+  const status = $("batchShotStatus")?.value;
+  if (!confirm(`לעדכן ${selectedShotIds.size} שוטים לסטטוס "${status}"?`)) return;
+  await api("/api/shots/batch/status", {
+    method: "PATCH",
+    body: JSON.stringify({
+      project_id: currentProjectId,
+      shot_ids: [...selectedShotIds],
+      status,
+      confirmed: true,
+    }),
+  });
+  selectedShotIds.clear();
+  await loadShots();
 }
 
 function updateShotFilters() {

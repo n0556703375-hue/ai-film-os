@@ -7,6 +7,7 @@ from pathlib import Path
 from app.database.connection import init_db
 from app.api.health import router as health_router
 from app.api.projects import router as projects_router
+from app.api.shot_batches import router as shot_batches_router
 from app.api.shots import router as shots_router
 from app.api.assets import router as assets_router
 from app.api.scenes import router as scenes_router
@@ -37,6 +38,7 @@ app = FastAPI(
 app.include_router(health_router)
 app.include_router(projects_router)
 app.include_router(dashboard_router)
+app.include_router(shot_batches_router)
 app.include_router(shots_router)
 app.include_router(assets_router)
 app.include_router(scenes_router)
