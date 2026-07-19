@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Film OS</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <h1>AI Film OS — כתובת אפס</h1>
+  <p>Story Bible · Scenes · Shots · Continuity · QA</p>
+</header>
+<main>
+  <nav>
+    <button data-tab="dashboard">דשבורד</button>
+    <button data-tab="scenes">סצנות</button>
+    <button data-tab="shots">שוטים</button>
+    <button data-tab="assets">Story Bible</button>
+    <button data-tab="qa">QA Center</button>
+  </nav>
+  <section id="dashboard" class="panel active"></section>
+  <section id="scenes" class="panel"></section>
+  <section id="shots" class="panel"></section>
+  <section id="assets" class="panel"></section>
+  <section id="qa" class="panel"></section>
+</main>
+<div id="modal" class="modal"><div class="dialog"><button onclick="closeModal()">סגירה</button><div id="modalContent"></div></div></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
