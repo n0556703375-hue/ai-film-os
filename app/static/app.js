@@ -261,6 +261,10 @@ async function openShot(id) {
             <button onclick="saveWorkspace(${shot.id})">שמירת שוט</button>
             <button class="secondary" onclick="runDirector(${shot.id})">Run Director</button>
           </div>
+          <div class="row">
+            <button class="secondary" onclick="generateWithOpenAI(${shot.id}, 'text')">AI: שיפור פרומפט</button>
+            <button onclick="generateWithOpenAI(${shot.id}, 'image')">Nano Banana Pro · 2K</button>
+          </div>
         </div>
       </div>
       <div>
@@ -390,6 +394,55 @@ async function runDirector(id) {
       </div>`).join("") : "<p>לא נמצאו בעיות.</p>"}
     ${data.prompt ? `<h3>פרומפט</h3><pre>${esc(data.prompt)}</pre>` : ""}
     <button onclick="openShot(${id})">חזרה לשוט</button>`);
+}
+
+async function generateWithOpenAI(id, mediaType) {
+  if (mediaType === "image" && !confirm("ליצור תמונה חדשה? הפעולה משתמשת בקרדיט API.")) return;
+  show(`<h2>יצירה באמצעות AI</h2><p>הבקשה נשלחה. נא להמתין…</p>`);
+  try {
+    const data = await api(`/api/generation/shots/${id}`, {
+      method:"POST",
+      body:JSON.stringify({
+        media_type:mediaType,
+        instructions:"",
+        size:"1536x1024",
+        quality:"medium"
+      })
+    });
+    if (data.media_type === "image") {
+      show(`<h2>Nano Banana Pro יוצר תמונת 2K</h2>
+        <p>המשימה נשלחה. המערכת תבדוק אוטומטית מתי התמונה מוכנה.</p>`);
+      await waitForMagnific(id, data.task_id);
+      return;
+    }
+    show(`<h2>הפרומפט שופר ונשמר</h2><pre>${esc(data.prompt)}</pre>
+      <button onclick="openShot(${id})">חזרה לשוט</button>`);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function waitForMagnific(shotId, taskId) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    try {
+      const data = await api(`/api/generation/shots/${shotId}/magnific/${encodeURIComponent(taskId)}`);
+      if (data.status === "COMPLETED" && data.media) {
+        show(`<h2>התמונה נוצרה ב־Nano Banana Pro · 2K</h2>
+          <img src="${esc(data.media.url)}" alt="תוצאת שוט" style="max-width:100%;border-radius:12px">
+          <div class="row"><button onclick="openShot(${shotId})">שמירה וחזרה לשוט</button></div>`);
+        return;
+      }
+      $("modalContent").innerHTML = `<h2>Nano Banana Pro יוצר תמונת 2K</h2>
+        <p>סטטוס: ${esc(data.status)} · בדיקה ${attempt + 1}</p>`;
+    } catch (error) {
+      showError(error);
+      return;
+    }
+  }
+  show(`<h2>המשימה עדיין בתהליך</h2>
+    <p>Magnific ממשיך ליצור את התמונה. אפשר לחזור לשוט ולבדוק שוב מאוחר יותר.</p>
+    <button onclick="openShot(${shotId})">חזרה לשוט</button>`);
 }
 
 async function checkContinuity(id) {
