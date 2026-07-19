@@ -1,11 +1,12 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from app.core.config import settings
 from app.database.connection import init_db
 from app.repositories import jobs, projects, scenes, shots
+from app.services.video_provider import VideoGenerationResult
 from app.worker import process_one_job
 
 
@@ -40,6 +41,8 @@ class MediaWorkerTests(unittest.TestCase):
             "title": "Shot",
             "prompt": "A locked production prompt",
             "status": "פרומפט מוכן",
+            "duration_seconds": 6,
+            "movement": "slow push in",
         })
         self.project_id = project["id"]
 
@@ -79,13 +82,13 @@ class MediaWorkerTests(unittest.TestCase):
         self.assertEqual(shots.get_shot(self.shot["id"])["status"], "תמונת טיוטה")
         validate.assert_called_once_with("https://example.com/result.jpg")
 
-    def test_video_job_fails_without_retry(self):
+    def test_video_job_requires_approved_image(self):
         jobs.enqueue_job(
             self.project_id,
             self.shot["id"],
             "video",
             {},
-            "worker-video-1",
+            "worker-video-no-image",
             max_attempts=3,
         )
 
@@ -93,7 +96,47 @@ class MediaWorkerTests(unittest.TestCase):
 
         self.assertEqual(failed["status"], "failed")
         self.assertEqual(failed["attempts"], 1)
-        self.assertIn("Video worker", failed["last_error"])
+        self.assertIn("לאשר תמונת שוט", failed["last_error"])
+
+    @patch("app.worker.get_video_provider")
+    def test_video_job_uses_provider_contract_and_creates_media(self, get_provider):
+        shots.create_media_result(self.shot["id"], {
+            "media_type": "image",
+            "url": "https://example.com/approved.jpg",
+            "provider": "Magnific",
+            "model": "Nano Banana Pro",
+            "status": "מאושר",
+        })
+        provider = Mock()
+        provider.generate.return_value = VideoGenerationResult(
+            url="https://example.com/result.mp4",
+            provider="Test Video",
+            model="test-i2v",
+            external_task_id="video-task-1",
+            actual_cost_usd=0.42,
+        )
+        get_provider.return_value = provider
+        jobs.enqueue_job(
+            self.project_id,
+            self.shot["id"],
+            "video",
+            {"audio_mode": "none", "aspect_ratio": "16:9"},
+            "worker-video-success",
+        )
+
+        completed = process_one_job("test-worker")
+
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(completed["actual_cost_usd"], 0.42)
+        media = shots.list_media_results(self.shot["id"])
+        video = next(item for item in media if item["media_type"] == "video")
+        self.assertEqual(video["url"], "https://example.com/result.mp4")
+        self.assertEqual(video["metadata"]["provider_task_id"], "video-task-1")
+        self.assertEqual(shots.get_shot(self.shot["id"])["status"], "וידאו טיוטה")
+        request = provider.generate.call_args.args[0]
+        self.assertEqual(request.image_url, "https://example.com/approved.jpg")
+        self.assertEqual(request.duration_seconds, 6)
+        self.assertEqual(request.camera_motion, "slow push in")
 
     def test_empty_queue_returns_none(self):
         self.assertIsNone(process_one_job("test-worker"))
