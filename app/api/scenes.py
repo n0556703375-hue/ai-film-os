@@ -50,7 +50,7 @@ def import_script(request: ScriptImportRequest):
                     prompt = build_prompt(shot)
                     shot_repo.save_prompt_version(item["id"], prompt, shot.get("negative_prompt", ""), "script-import")
                     shot_repo.update_shot(item["id"], {"prompt": prompt, "status": "פרומפט מוכן"})
-                total_shots += count
+                total_shots += len(result["shots"])
         return {
             "project_id": request.project_id,
             "scenes_created": len(created),
