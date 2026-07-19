@@ -17,7 +17,11 @@ class DeploymentSmokeTests(unittest.TestCase):
     def test_required_deployment_routes_are_registered(self):
         from app.main import app
 
-        paths = {route.path for route in app.routes}
+        paths = {
+            route.path
+            for route in app.routes
+            if isinstance(getattr(route, "path", None), str)
+        }
 
         self.assertIn("/health", paths)
         self.assertIn("/", paths)
