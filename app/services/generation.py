@@ -1,4 +1,6 @@
 import httpx
+from io import BytesIO
+from PIL import Image, ImageStat
 from openai import OpenAI
 
 from app.core.config import settings
@@ -177,3 +179,22 @@ def get_magnific_image(task_id: str) -> dict:
         "generated": data.get("generated", []),
         "has_nsfw": data.get("has_nsfw", []),
     }
+
+def validate_generated_image(url: str) -> None:
+    with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+        response = client.get(url, headers={"Accept": "image/*", "User-Agent": "AI-Film-OS/1.0"})
+    response.raise_for_status()
+    content_type = response.headers.get("content-type", "").split(";")[0]
+    if content_type and not content_type.startswith("image/"):
+        raise RuntimeError("Magnific החזיר קישור שאינו קובץ תמונה.")
+    try:
+        image = Image.open(BytesIO(response.content)).convert("RGB")
+        image.thumbnail((256, 256))
+        stat = ImageStat.Stat(image)
+    except Exception as exc:
+        raise RuntimeError("קובץ התוצאה של Magnific אינו תמונה תקינה.") from exc
+    if image.width < 64 or image.height < 64:
+        raise RuntimeError("Magnific החזיר תמונה קטנה או ריקה.")
+    nearly_white = all(mean > 247 for mean in stat.mean) and all(value < 4 for value in stat.var)
+    if nearly_white:
+        raise RuntimeError("Magnific החזיר תמונה לבנה. יש ליצור את הרפרנס מחדש.")
