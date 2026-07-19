@@ -10,6 +10,7 @@ from app.services.generation import (
     submit_magnific_image,
     validate_generated_image,
 )
+from app.services.video_model_selector import select_video_model
 from app.services.video_provider import (
     VideoGenerationRequest,
     VideoProviderNotConfigured,
@@ -102,6 +103,7 @@ def _process_video_job(job: dict) -> dict:
     if not shot:
         raise ValueError("השוט של משימת הווידאו לא נמצא.")
     payload = job.get("payload") or {}
+    selection = select_video_model(shot, payload)
     request = VideoGenerationRequest(
         image_url=_approved_image_url(job["shot_id"]),
         prompt=str(payload.get("prompt") or shot.get("prompt") or ""),
@@ -109,6 +111,7 @@ def _process_video_job(job: dict) -> dict:
         camera_motion=str(payload.get("camera_motion") or shot.get("movement") or ""),
         audio_mode=str(payload.get("audio_mode") or "none"),
         aspect_ratio=str(payload.get("aspect_ratio") or "16:9"),
+        model_profile=selection.profile,
     )
     result = get_video_provider().generate(request)
     media = shots.create_media_result(job["shot_id"], {
@@ -122,6 +125,8 @@ def _process_video_job(job: dict) -> dict:
             "provider_task_id": result.external_task_id,
             "media_job_id": job["id"],
             "idempotency_key": job["idempotency_key"],
+            "model_profile": selection.profile,
+            "model_selection_reason": selection.reason,
         },
     })
     shots.update_shot(job["shot_id"], {"status": "וידאו טיוטה"})
@@ -130,6 +135,8 @@ def _process_video_job(job: dict) -> dict:
         "url": media["url"],
         "provider_task_id": result.external_task_id,
         "actual_cost_usd": result.actual_cost_usd,
+        "model_profile": selection.profile,
+        "model_selection_reason": selection.reason,
     }
 
 
