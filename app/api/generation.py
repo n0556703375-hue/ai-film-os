@@ -37,7 +37,8 @@ def generate_asset_reference(asset_id: int, request: CharacterReferenceRequest):
     try:
         prompt = build_character_reference_prompt(asset, request.view_type, request.instructions)
         existing = [item["url"] for item in asset.get("reference_images", [])]
-        task = submit_magnific_reference(prompt, existing[:1])
+        seed_references = [] if request.view_type == "portrait" else existing[:1]
+        task = submit_magnific_reference(prompt, seed_references)
         return {**task, "asset_id": asset_id, "view_type": request.view_type}
     except GenerationNotConfigured as exc:
         raise HTTPException(503, str(exc))
