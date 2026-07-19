@@ -58,7 +58,7 @@ def _magnific_headers() -> dict:
 def refine_prompt(shot: dict, instructions: str = "") -> str:
     source_prompt = shot.get("prompt") or build_prompt(shot)
     request = f"""You are the production prompt specialist for AI Film OS.
-Rewrite the source as one precise, production-ready cinematic image prompt for Magnific Mystic.
+Rewrite the source as one precise, production-ready cinematic image prompt for Magnific Nano Banana Pro.
 Preserve every approved character, wardrobe, location and prop rule.
 Do not add people, objects, text, logos or story facts that are not supplied.
 Return only the final prompt in English.
@@ -83,7 +83,7 @@ def submit_magnific_image(
     shot: dict,
     *,
     instructions: str = "",
-    aspect_ratio: str = "widescreen_16_9",
+    aspect_ratio: str = "16:9",
 ) -> dict:
     prompt = shot.get("prompt") or build_prompt(shot)
     if instructions:
@@ -93,17 +93,11 @@ def submit_magnific_image(
         "prompt": prompt,
         "resolution": settings.magnific_resolution,
         "aspect_ratio": aspect_ratio,
-        "model": settings.magnific_image_model,
-        "engine": "automatic",
-        "fixed_generation": False,
-        "filter_nsfw": True,
-        "adherence": settings.magnific_adherence,
-        "hdr": settings.magnific_hdr,
-        "creative_detailing": settings.magnific_creative_detailing,
+        "reference_images": [],
     }
     with httpx.Client(timeout=45.0) as client:
         response = client.post(
-            f"{settings.magnific_api_base}/v1/ai/mystic",
+            f"{settings.magnific_api_base}/v1/ai/text-to-image/nano-banana-pro",
             headers=_magnific_headers(),
             json=payload,
         )
@@ -117,14 +111,14 @@ def submit_magnific_image(
         "status": data.get("status", "IN_PROGRESS"),
         "generated": data.get("generated", []),
         "provider": "Magnific",
-        "model": f"Mystic/{settings.magnific_image_model}",
+        "model": "Nano Banana Pro",
     }
 
 
 def get_magnific_image(task_id: str) -> dict:
     with httpx.Client(timeout=30.0) as client:
         response = client.get(
-            f"{settings.magnific_api_base}/v1/ai/mystic/{task_id}",
+            f"{settings.magnific_api_base}/v1/ai/text-to-image/nano-banana-pro/{task_id}",
             headers=_magnific_headers(),
         )
     response.raise_for_status()
