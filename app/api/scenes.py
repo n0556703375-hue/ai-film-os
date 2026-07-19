@@ -11,9 +11,11 @@ from app.services.screenplay_breakdown import breakdown_screenplay
 
 router = APIRouter(prefix="/api/scenes", tags=["scenes"])
 
+
 @router.get("")
 def list_scenes(project_id: int | None = None):
     return repo.list_scenes(project_id)
+
 
 @router.post("")
 def create_scene(scene: SceneCreate):
@@ -21,6 +23,7 @@ def create_scene(scene: SceneCreate):
         return repo.create_scene(scene.model_dump())
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
 
 @router.post("/import-script")
 def import_script(request: ScriptImportRequest):
@@ -52,6 +55,7 @@ def import_script(request: ScriptImportRequest):
             "project_id": request.project_id,
             "scenes_created": len(created),
             "shots_created": total_shots,
+            "imported_scenes": created,
             "scenes": repo.list_scenes(request.project_id),
         }
     except GenerationNotConfigured as exc:
@@ -61,12 +65,14 @@ def import_script(request: ScriptImportRequest):
     except Exception as exc:
         raise HTTPException(502, f"ייבוא התסריט נכשל: {exc}")
 
+
 @router.get("/{scene_id}")
 def get_scene(scene_id: int):
     scene = repo.get_scene(scene_id)
     if not scene:
         raise HTTPException(404, "הסצנה לא נמצאה.")
     return scene
+
 
 @router.patch("/{scene_id}")
 def update_scene(scene_id: int, update: SceneUpdate):
@@ -77,6 +83,7 @@ def update_scene(scene_id: int, update: SceneUpdate):
     if not scene:
         raise HTTPException(404, "הסצנה לא נמצאה.")
     return scene
+
 
 @router.post("/{scene_id}/shot-map")
 def create_shot_map(scene_id: int, request: ShotMapRequest):
