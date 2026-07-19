@@ -29,8 +29,18 @@ def _load_assets(conn, shot_id: int):
     result = []
     for row in rows:
         asset = dict(row)
-        refs = conn.execute("SELECT url FROM asset_reference_images WHERE asset_id=? ORDER BY id DESC",
-                            (asset["id"],)).fetchall()
+        refs = conn.execute(
+            """
+            SELECT r.url
+            FROM asset_reference_images r
+            WHERE r.asset_id=?
+              AND r.approved=1
+              AND r.id=?
+              AND ?='locked'
+            LIMIT 1
+            """,
+            (asset["id"], asset.get("master_reference_id"), asset.get("lock_status")),
+        ).fetchall()
         asset["reference_images"] = [r["url"] for r in refs]
         result.append(asset)
     return result
