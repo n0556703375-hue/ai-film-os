@@ -5,7 +5,6 @@ from app.database.connection import get_connection
 
 APPROVED = "מאושר"
 REJECTED = "נדחה"
-DRAFT = "טיוטה"
 
 
 def _shot_status_for_media(conn, shot_id: int) -> str:
@@ -27,7 +26,7 @@ def _shot_status_for_media(conn, shot_id: int) -> str:
     ).fetchone()
     if approved_video:
         return "וידאו מאושר"
-    if any_video:
+    if approved_image and any_video:
         return "וידאו טיוטה"
     if approved_image:
         return "תמונה מאושרת"
@@ -141,6 +140,7 @@ def get_pipeline(shot_id: int):
         shot = conn.execute("SELECT id,status FROM shots WHERE id=?", (shot_id,)).fetchone()
         if not shot:
             return None
+        derived_status = shot["status"] if shot["status"] == "סופי" else _shot_status_for_media(conn, shot_id)
         media = conn.execute(
             "SELECT * FROM media_results WHERE shot_id=? ORDER BY media_type,version DESC",
             (shot_id,),
@@ -151,7 +151,7 @@ def get_pipeline(shot_id: int):
         ).fetchall()
     return {
         "shot_id": shot_id,
-        "status": shot["status"],
+        "status": derived_status,
         "media_results": [dict(row) for row in media],
         "approval_events": [dict(row) for row in events],
     }
