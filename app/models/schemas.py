@@ -109,6 +109,12 @@ class SceneCreate(BaseModel):
     ending: str = Field(default="", max_length=10000)
     notes: str = Field(default="", max_length=10000)
 
+class SceneAssetVariantUpsert(BaseModel):
+    state_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=10000)
+    reference_url: str = Field(default="", max_length=4000)
+    visual_rules: str = Field(default="", max_length=10000)
+
 class ScriptImportRequest(BaseModel):
     project_id: int = Field(ge=1)
     screenplay: str = Field(min_length=50, max_length=500000)
