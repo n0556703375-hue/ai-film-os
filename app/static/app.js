@@ -47,14 +47,31 @@ async function loadDashboard() {
 
 async function loadScenes() {
   const scenes = await api("/api/scenes");
-  $("scenes").innerHTML = `<div class="grid">${scenes.map((scene) => `
+  $("scenes").innerHTML = `<div class="section-toolbar"><div><h2>סצנות</h2><div class="meta">סצנות המחוברות לשוטים ולמשך ההפקה</div></div><button onclick="newScene()">סצנה חדשה</button></div><div class="grid">${scenes.map((scene) => `
     <div class="card">
       <span class="badge">סצנה ${scene.scene_number}</span>
       <div class="title">${esc(scene.title)}</div>
-      <div class="meta">${scene.shot_count} שוטים</div>
+      <div class="meta">${scene.shot_count} שוטים · ${Number(scene.duration_seconds || 0).toFixed(1)} שנ׳ · ${esc(scene.status || "מתוכנן")}</div>
       <p>${esc(scene.story_goal || "מטרת הסצנה טרם הוגדרה")}</p>
       <button onclick="openScene(${scene.id})">פתיחת Scene Workspace</button>
     </div>`).join("")}</div>`;
+}
+
+function newScene() {
+  show(`<h2>סצנה חדשה</h2><div class="form-grid">
+    <div><label>מספר סצנה</label><input id="newSceneNumber" type="number" min="1"></div>
+    <div><label>סטטוס</label><input id="newSceneStatus" value="מתוכנן"></div>
+    <div class="wide"><label>שם הסצנה</label><input id="newSceneTitle"></div>
+    <div class="wide"><label>מטרה עלילתית</label><textarea id="newSceneGoal"></textarea></div>
+  </div><button onclick="createScene()">יצירת סצנה</button>`);
+}
+
+async function createScene() {
+  const scene = await api("/api/scenes", {method:"POST", body:JSON.stringify({
+    scene_number:Number($("newSceneNumber").value), title:$("newSceneTitle").value,
+    status:$("newSceneStatus").value, story_goal:$("newSceneGoal").value
+  })});
+  await openScene(scene.id);
 }
 
 async function openScene(id) {
@@ -65,6 +82,8 @@ async function openScene(id) {
     <div class="workspace-grid">
       <div class="workspace-section">
         <h3>Scene Bible</h3>
+        <label>מספר סצנה</label><input id="scNumber" type="number" min="1" value="${scene.scene_number}">
+        <label>סטטוס</label><input id="scStatus" value="${esc(scene.status || "מתוכנן")}">
         <label>שם הסצנה</label><input id="scTitle" value="${esc(scene.title)}">
         <label>מטרה עלילתית</label><textarea id="scGoal">${esc(scene.story_goal)}</textarea>
         <label>רגש מרכזי</label><textarea id="scEmotion">${esc(scene.emotion)}</textarea>
@@ -75,7 +94,7 @@ async function openScene(id) {
         <button onclick="saveScene(${scene.id})">שמירת הסצנה</button>
       </div>
       <div class="workspace-section">
-        <h3>שוטים בסצנה</h3>
+        <div class="section-toolbar"><h3>שוטים בסצנה</h3><button onclick="newShot(${scene.id})">שוט חדש</button></div>
         ${scene.shots.map((shot)=>`
           <div class="card">
             <div class="meta">שוט ${shot.shot_number} · ${shot.asset_count} נכסים</div>
@@ -89,6 +108,8 @@ async function openScene(id) {
 
 async function saveScene(id) {
   const payload = {
+    scene_number: Number($("scNumber").value),
+    status: $("scStatus").value,
     title: $("scTitle").value,
     story_goal: $("scGoal").value,
     emotion: $("scEmotion").value,
@@ -104,7 +125,7 @@ async function saveScene(id) {
 
 async function loadShots() {
   const shots = await api("/api/shots");
-  $("shots").innerHTML = `<div class="grid">${shots.map((shot) => `
+  $("shots").innerHTML = `<div class="section-toolbar"><div><h2>שוטים</h2><div class="meta">שדות צילום, גרסאות ותוצאות הפקה</div></div><button onclick="newShot()">שוט חדש</button></div><div class="grid">${shots.map((shot) => `
     <div class="card">
       <div class="meta">שוט ${shot.shot_number} · ${esc(shot.shot_type || "רגיל")} · סצנה ${shot.scene_number || "-"} · ${shot.asset_count} נכסים</div>
       <div class="title">${esc(shot.title)}</div>
@@ -116,10 +137,29 @@ async function loadShots() {
     </div>`).join("")}</div>`;
 }
 
+async function newShot(sceneId = null) {
+  const scenes = await api("/api/scenes");
+  if (!scenes.length) return newScene();
+  show(`<h2>שוט חדש</h2><div class="form-grid">
+    <div><label>סצנה</label><select id="newShotScene">${scenes.map((s)=>`<option value="${s.id}" ${s.id===sceneId?"selected":""}>${s.scene_number} — ${esc(s.title)}</option>`).join("")}</select></div>
+    <div><label>מספר שוט</label><input id="newShotNumber" type="number" min="1"></div>
+    <div class="wide"><label>שם השוט</label><input id="newShotTitle"></div>
+  </div><button onclick="createShot()">יצירת שוט</button>`);
+}
+
+async function createShot() {
+  const shot = await api("/api/shots", {method:"POST", body:JSON.stringify({
+    scene_id:Number($("newShotScene").value), shot_number:Number($("newShotNumber").value),
+    title:$("newShotTitle").value
+  })});
+  await openShot(shot.id);
+}
+
 async function openShot(id) {
-  const [shot, assets] = await Promise.all([
+  const [shot, assets, scenes] = await Promise.all([
     api(`/api/shots/${id}`),
-    api("/api/assets")
+    api("/api/assets"),
+    api("/api/scenes")
   ]);
   const selected = new Set(shot.assets.map((a) => a.id));
   const shotTypes = ["רגיל","Establishing","Close-up","Medium","Wide","Insert","POV","Reaction","Transition"];
@@ -131,6 +171,10 @@ async function openShot(id) {
       <div>
         <div class="workspace-section">
           <h3>הגדרות שוט</h3>
+          <label>שם השוט</label><input id="wsTitle" value="${esc(shot.title)}">
+          <label>סצנה</label><select id="wsScene">${scenes.map((s)=>`<option value="${s.id}" ${s.id===shot.scene_id?"selected":""}>${s.scene_number} — ${esc(s.title)}</option>`).join("")}</select>
+          <label>מספר שוט</label><input id="wsNumber" type="number" min="1" value="${shot.shot_number}">
+          <label>משך בשניות</label><input id="wsDuration" type="number" min="0.1" step="0.1" value="${shot.duration_seconds || ""}">
           <label>סוג שוט</label>
           <select id="wsShotType">
             ${shotTypes.map((s)=>`<option ${s===(shot.shot_type||"רגיל")?"selected":""}>${s}</option>`).join("")}
@@ -140,13 +184,20 @@ async function openShot(id) {
             ${["מתוכנן","רפרנס","פרומפט מוכן","תמונה מאושרת","וידאו מוכן","וידאו מאושר","אודיו","QA","סופי"]
               .map((s)=>`<option ${s===shot.status?"selected":""}>${s}</option>`).join("")}
           </select>
-          <label>הערות / פעולה</label><textarea id="wsNotes">${esc(shot.notes)}</textarea>
+          <label>פעולה</label><textarea id="wsAction">${esc(shot.action)}</textarea>
+          <label>הערות</label><textarea id="wsNotes">${esc(shot.notes)}</textarea>
           <label>מצלמה וקומפוזיציה</label><textarea id="wsCamera">${esc(shot.camera)}</textarea>
+          <label>זווית מצלמה</label><input id="wsCameraAngle" value="${esc(shot.camera_angle)}">
+          <label>קומפוזיציה מובנית</label><textarea id="wsComposition">${esc(shot.composition)}</textarea>
           <label>עדשה</label><input id="wsLens" value="${esc(shot.lens)}">
           <label>תאורה</label><textarea id="wsLighting">${esc(shot.lighting)}</textarea>
           <label>תנועת מצלמה</label><textarea id="wsMovement">${esc(shot.movement)}</textarea>
           <label>מצב רוח</label><textarea id="wsMood">${esc(shot.mood)}</textarea>
+          <label>פלטת צבעים</label><textarea id="wsPalette">${esc(shot.color_palette)}</textarea>
+          <label>אודיו</label><textarea id="wsAudio">${esc(shot.audio)}</textarea>
           <label>דיאלוג</label><textarea id="wsDialogue">${esc(shot.dialogue)}</textarea>
+          <label>פרומפט</label><textarea id="wsPrompt">${esc(shot.prompt)}</textarea>
+          <label>Negative Prompt</label><textarea id="wsNegative">${esc(shot.negative_prompt)}</textarea>
           <div class="row">
             <button onclick="saveWorkspace(${shot.id})">שמירת שוט</button>
             <button class="secondary" onclick="runDirector(${shot.id})">Run Director</button>
@@ -173,9 +224,13 @@ async function openShot(id) {
           <button onclick="saveShotAssets(${shot.id})">שמירת שיוך נכסים</button>
         </div>
         <div class="workspace-section" style="margin-top:15px">
-          <h3>פרומפט נוכחי</h3>
-          <pre>${esc(shot.prompt || "טרם נוצר פרומפט")}</pre>
-          <button onclick="makePrompt(${shot.id})">בניית פרומפט</button>
+          <div class="section-toolbar"><h3>גרסאות פרומפט</h3><button onclick="makePrompt(${shot.id})">בניית פרומפט</button></div>
+          ${shot.prompt_versions.length ? shot.prompt_versions.map((v)=>`<div class="history-item"><b>v${v.version}</b> · ${esc(v.source || "manual")}<div class="meta">${esc(v.created_at)}</div><p>${esc(v.prompt).slice(0,260)}</p></div>`).join("") : "<p>טרם נשמרו גרסאות.</p>"}
+        </div>
+        <div class="workspace-section" style="margin-top:15px">
+          <div class="section-toolbar"><h3>תוצאות תמונה ווידאו</h3><button onclick="newMedia(${shot.id})">תוצאה חדשה</button></div>
+          ${shot.media_results.length ? shot.media_results.map((m)=>`<div class="history-item"><b>${m.media_type==="image"?"תמונה":"וידאו"} v${m.version}</b> · ${esc(m.provider || "ללא ספק")} · ${esc(m.status)}<br><a href="${esc(m.url)}" target="_blank" rel="noopener">פתיחת תוצאה</a></div>`).join("") : "<p>טרם נשמרו תוצאות.</p>"}
+          <button class="secondary" onclick="newIssueForShot(${shot.id})">הוספת בדיקת רציפות</button>
         </div>
       </div>
     </div>`);
@@ -183,19 +238,72 @@ async function openShot(id) {
 
 async function saveWorkspace(id) {
   const payload = {
+    title: $("wsTitle").value,
+    scene_id: Number($("wsScene").value),
+    shot_number: Number($("wsNumber").value),
+    duration_seconds: $("wsDuration").value ? Number($("wsDuration").value) : null,
     shot_type: $("wsShotType").value,
     status: $("wsStatus").value,
     notes: $("wsNotes").value,
+    action: $("wsAction").value,
     camera: $("wsCamera").value,
+    camera_angle: $("wsCameraAngle").value,
+    composition: $("wsComposition").value,
     lens: $("wsLens").value,
     lighting: $("wsLighting").value,
     movement: $("wsMovement").value,
     mood: $("wsMood").value,
+    color_palette: $("wsPalette").value,
+    audio: $("wsAudio").value,
     dialogue: $("wsDialogue").value,
+    prompt: $("wsPrompt").value,
+    negative_prompt: $("wsNegative").value,
   };
   await api(`/api/shots/${id}`, {method:"PATCH", body:JSON.stringify(payload)});
   alert("השוט נשמר.");
   await openShot(id);
+}
+
+async function newMedia(shotId) {
+  const versions = await api(`/api/shots/${shotId}/prompts`);
+  show(`<h2>תוצאת מדיה חדשה</h2><div class="form-grid">
+    <div><label>סוג</label><select id="mediaType"><option value="image">תמונה</option><option value="video">וידאו</option></select></div>
+    <div><label>סטטוס</label><input id="mediaStatus" value="טיוטה"></div>
+    <div class="wide"><label>קישור לתוצאה</label><input id="mediaUrl"></div>
+    <div><label>ספק</label><input id="mediaProvider" placeholder="Magnific / Runway / אחר"></div>
+    <div><label>מודל</label><input id="mediaModel"></div>
+    <div class="wide"><label>גרסת פרומפט מקור</label><select id="mediaPrompt"><option value="">ללא שיוך</option>${versions.map((v)=>`<option value="${v.id}">v${v.version} · ${esc(v.source)}</option>`).join("")}</select></div>
+    <div class="wide"><label>הערות</label><textarea id="mediaNotes"></textarea></div>
+  </div><button onclick="saveMedia(${shotId})">שמירת גרסה</button>`);
+}
+
+async function saveMedia(shotId) {
+  await api(`/api/shots/${shotId}/media`, {method:"POST", body:JSON.stringify({
+    media_type:$("mediaType").value, url:$("mediaUrl").value,
+    provider:$("mediaProvider").value, model:$("mediaModel").value,
+    prompt_version_id:$("mediaPrompt").value ? Number($("mediaPrompt").value) : null,
+    status:$("mediaStatus").value, notes:$("mediaNotes").value
+  })});
+  await openShot(shotId);
+}
+
+function newIssueForShot(shotId) {
+  show(`<h2>בדיקת רציפות חדשה</h2><div class="form-grid">
+    <div><label>קטגוריה</label><input id="issueCategory"></div>
+    <div><label>חומרה</label><select id="issueSeverity"><option>low</option><option selected>medium</option><option>high</option><option>critical</option></select></div>
+    <div class="wide"><label>הבעיה</label><textarea id="issueMessage"></textarea></div>
+    <div><label>מצב צפוי</label><textarea id="issueExpected"></textarea></div>
+    <div><label>מצב שנמצא</label><textarea id="issueObserved"></textarea></div>
+  </div><button onclick="saveIssue(${shotId})">שמירת בדיקה</button>`);
+}
+
+async function saveIssue(shotId) {
+  await api("/api/issues", {method:"POST", body:JSON.stringify({
+    shot_id:shotId, category:$("issueCategory").value, severity:$("issueSeverity").value,
+    message:$("issueMessage").value, expected:$("issueExpected").value,
+    observed:$("issueObserved").value
+  })});
+  closeModal(); await loadQA();
 }
 
 async function saveShotAssets(id) {
@@ -305,12 +413,14 @@ async function loadQA() {
   <div id="issueGrid" class="grid">${issues.length?issues.map(issueCard).join(""):"<p>אין עדיין בעיות שמורות.</p>"}</div>`;
 }
 function issueCard(issue){return `<div class="card issue-${esc(issue.severity)} ${issue.resolved?"issue-resolved":""}" data-severity="${esc(issue.severity)}" data-resolved="${issue.resolved}">
-<span class="badge">${esc(issue.severity)}</span><div class="title">${esc(issue.category)}</div><p>${esc(issue.message)}</p>
+<span class="badge">${esc(issue.severity)} · ${esc(issue.status || (issue.resolved?"נפתר":"פתוח"))}</span><div class="title">${esc(issue.category)}</div><p>${esc(issue.message)}</p>
+${issue.expected?`<p><b>צפוי:</b> ${esc(issue.expected)}</p>`:""}${issue.observed?`<p><b>נמצא:</b> ${esc(issue.observed)}</p>`:""}${issue.resolution?`<p><b>פתרון:</b> ${esc(issue.resolution)}</p>`:""}
 <div class="meta">${issue.shot_number?`שוט ${issue.shot_number}: ${esc(issue.shot_title)}`:""}</div>
 <div class="row">${issue.shot_id?`<button onclick="openShot(${issue.shot_id})">פתיחת השוט</button>`:""}
-<button class="secondary" onclick="toggleIssue(${issue.id},${!issue.resolved})">${issue.resolved?"פתיחה מחדש":"סימון כפתור"}</button></div></div>`;}
+<select onchange="setIssueStatus(${issue.id},this.value)">${["פתוח","בטיפול","נפתר","אושר כחריגה"].map((s)=>`<option ${s===(issue.status || (issue.resolved?"נפתר":"פתוח"))?"selected":""}>${s}</option>`).join("")}</select></div></div>`;}
 function filterIssues(filter){document.querySelectorAll("#issueGrid .card").forEach((card)=>{const visible=filter==="all"||(filter==="resolved"&&card.dataset.resolved==="1")||card.dataset.severity===filter;card.style.display=visible?"":"none";});}
 async function toggleIssue(id,resolved){await api(`/api/issues/${id}/resolve?resolved=${resolved}`,{method:"PATCH"});await loadQA();await loadDashboard();}
+async function setIssueStatus(id,status){await api(`/api/issues/${id}`,{method:"PATCH",body:JSON.stringify({status})});await loadQA();await loadDashboard();}
 async function clearResolved(){if(!confirm("למחוק את כל הבעיות הפתורות?"))return;await api("/api/issues/resolved",{method:"DELETE"});await loadQA();}
 
 function show(html){$("modalContent").innerHTML=html;$("modal").style.display="flex";}
