@@ -34,6 +34,14 @@ def migrate_database(conn: sqlite3.Connection) -> None:
         "status": "TEXT NOT NULL DEFAULT 'מתוכנן'",
         "updated_at": "TEXT NOT NULL DEFAULT ''",
     })
+    _add_columns(conn, "assets", {
+        "lock_status": "TEXT NOT NULL DEFAULT 'draft'",
+        "master_reference_id": "INTEGER",
+        "locked_at": "TEXT",
+    })
+    _add_columns(conn, "asset_reference_images", {
+        "approved": "INTEGER NOT NULL DEFAULT 0",
+    })
     _add_columns(conn, "prompt_versions", {
         "negative_prompt": "TEXT NOT NULL DEFAULT ''",
         "source": "TEXT NOT NULL DEFAULT 'manual'",
