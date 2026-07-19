@@ -152,7 +152,7 @@ async function openScene(id) {
         <button onclick="saveScene(${scene.id})">שמירת הסצנה</button>
       </div>
       <div class="workspace-section">
-        <div class="section-toolbar"><h3>שוטים בסצנה</h3><button onclick="newShot(${scene.id})">שוט חדש</button></div>
+        <div class="section-toolbar"><h3>שוטים בסצנה</h3><div class="row"><button class="secondary" onclick="generateShotMap(${scene.id}, ${scene.shots.length})">יצירת מפת שוטים ופרומפטים</button><button onclick="newShot(${scene.id})">שוט חדש</button></div></div>
         ${scene.shots.map((shot)=>`
           <div class="card">
             <div class="meta">שוט ${shot.shot_number} · ${shot.asset_count} נכסים</div>
@@ -162,6 +162,20 @@ async function openScene(id) {
           </div>`).join("")}
       </div>
     </div>`);
+}
+
+async function generateShotMap(sceneId, existingCount) {
+  const value = prompt("כמה שוטים ליצור?", "6");
+  if (value === null) return;
+  const shotCount = Number(value);
+  if (!Number.isInteger(shotCount) || shotCount < 1 || shotCount > 20) return alert("יש לבחור 1–20 שוטים.");
+  const replaceExisting = existingCount > 0 && confirm("בסצנה קיימים שוטים. להחליף אותם במפה חדשה?");
+  if (existingCount > 0 && !replaceExisting) return;
+  show("<h2>יוצר מפת שוטים</h2><p>OpenAI בונה שוטים, משייך נכסים ומכין פרומפט לכל שוט…</p>");
+  try {
+    await api(`/api/scenes/${sceneId}/shot-map`, {method:"POST", body:JSON.stringify({shot_count:shotCount, replace_existing:replaceExisting})});
+    await openScene(sceneId);
+  } catch (error) { showError(error); }
 }
 
 async function saveScene(id) {
@@ -467,6 +481,7 @@ async function loadAssets() {
 }
 function assetCard(asset) {
   return `<div class="card" data-type="${esc(asset.asset_type)}">
+    ${asset.reference_url?`<img src="${esc(asset.reference_url)}" alt="רפרנס ${esc(asset.name)}" style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:10px;margin-bottom:10px">`:""}
     <span class="badge ${asset.approved?"approved":""}">${esc(asset.asset_type)}${asset.approved?" · מאושר":""}</span>
     <div class="title">${esc(asset.name)}</div><p>${esc(asset.description)}</p>
     <div class="meta">${esc(asset.visual_rules)}</div>
@@ -485,7 +500,7 @@ function newAsset() {
     <label>כללים חזותיים ורציפות</label><textarea id="asRules"></textarea>
     <label>Master Prompt</label><textarea id="asMaster"></textarea>
     <label>Negative Prompt</label><textarea id="asNegative"></textarea>
-    <label>קישור לרפרנס</label><input id="asUrl"><button onclick="createAsset()">יצירת נכס</button>`);
+    <label>תמונת רפרנס (קישור ישיר לתמונה)</label><input id="asUrl"><div class="meta">לדמויות מומלץ להוסיף תמונת זהות מאושרת; היא תישלח אוטומטית ל־Magnific בכל שוט משויך.</div><button onclick="createAsset()">יצירת נכס</button>`);
 }
 async function createAsset() {
   const payload={project_id:currentProjectId,asset_type:$("asType").value,name:$("asName").value,description:$("asDescription").value,
@@ -502,7 +517,8 @@ async function openAsset(id) {
   <label>כללים חזותיים ורציפות</label><textarea id="asRules">${esc(asset.visual_rules)}</textarea>
   <label>Master Prompt</label><textarea id="asMaster">${esc(asset.master_prompt)}</textarea>
   <label>Negative Prompt</label><textarea id="asNegative">${esc(asset.negative_prompt)}</textarea>
-  <label>קישור לרפרנס</label><input id="asUrl" value="${esc(asset.reference_url)}">
+  <label>תמונת רפרנס (קישור ישיר לתמונה)</label><input id="asUrl" value="${esc(asset.reference_url)}">
+  ${asset.reference_url?`<img src="${esc(asset.reference_url)}" alt="רפרנס ${esc(asset.name)}" style="width:100%;max-height:320px;object-fit:contain;border-radius:10px;margin-top:10px">`:""}
   <label class="asset-check"><input type="checkbox" id="asApproved" ${asset.approved?"checked":""}><span>נכס מאושר</span></label>
   <div class="row"><button onclick="saveAsset(${asset.id})">שמירה</button><button class="danger" onclick="deleteAsset(${asset.id})">מחיקה</button></div>
   </div><div class="workspace-section"><h3>שוטים מקושרים</h3>

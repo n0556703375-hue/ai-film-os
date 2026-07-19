@@ -10,6 +10,7 @@ def build_prompt(shot: dict) -> str:
             return f"{title}: not specified."
         return title + ": " + " | ".join(
             f"{i['name']} — {i['description']} Rules: {i['visual_rules']}"
+            + (" Identity reference image is attached." if i.get("reference_url") else "")
             for i in items
         )
 
@@ -29,7 +30,13 @@ Lighting: {shot.get('lighting') or 'motivated realistic lighting'}
 {block('WARDROBE', wardrobe)}
 
 ACTION
-{shot.get('notes') or 'Single clear action matching the shot title.'}
+{shot.get('action') or shot.get('notes') or 'Single clear action matching the shot title.'}
+
+FRAMING
+Shot type: {shot.get('shot_type') or 'cinematic'}
+Camera angle: {shot.get('camera_angle') or 'eye level'}
+Composition: {shot.get('composition') or 'clear cinematic composition'}
+Color palette: {shot.get('color_palette') or 'coherent with the project look'}
 
 CONTINUITY
 Preserve exact identity, wardrobe, props, architecture, lighting direction and color palette.

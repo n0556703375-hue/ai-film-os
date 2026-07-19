@@ -116,6 +116,10 @@ class GenerationRequest(BaseModel):
     size: Literal["1024x1024", "1536x1024", "1024x1536"] = "1536x1024"
     quality: Literal["low", "medium", "high"] = "medium"
 
+class ShotMapRequest(BaseModel):
+    shot_count: int = Field(default=6, ge=1, le=20)
+    replace_existing: bool = False
+
 
 class ContinuityIssueCreate(BaseModel):
     project_id: int = Field(default=1, ge=1)
