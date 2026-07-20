@@ -51,12 +51,22 @@ def _identity_drift_blocker(metadata):
     assessment = metadata.get("identity_drift")
     if not isinstance(assessment, dict):
         return None
-    if assessment.get("passed") is False or assessment.get("status") == "blocked":
-        reasons = assessment.get("reasons") or []
-        if isinstance(reasons, list) and reasons:
-            return " ".join(str(reason) for reason in reasons if str(reason).strip())
-        return "בדיקת זהות הדמות נכשלה."
-    return None
+
+    if assessment.get("passed") is True and assessment.get("status") not in {"blocked", "failed"}:
+        return None
+
+    reasons = assessment.get("reasons") or []
+    if isinstance(reasons, list) and reasons:
+        reason_text = " ".join(str(reason) for reason in reasons if str(reason).strip())
+        if reason_text:
+            return reason_text
+
+    status = str(assessment.get("status") or "").strip().lower()
+    if status in {"pending", "queued", "running", "in_progress"}:
+        return "בדיקת זהות הדמות טרם הושלמה."
+    if status in {"error", "unavailable"}:
+        return "בדיקת זהות הדמות אינה זמינה ויש להריץ אותה מחדש."
+    return "בדיקת זהות הדמות לא עברה בהצלחה."
 
 
 def decide_media(shot_id: int, media_id: int, decision: str, notes: str = ""):
