@@ -6,6 +6,8 @@ from pydantic import ValidationError
 
 from app.api.identity_assessments import (
     IdentityDriftAssessmentRequest,
+    IdentityDriftEvaluationRequest,
+    evaluate_and_record_identity_drift,
     record_identity_drift,
 )
 from app.core.config import settings
@@ -81,6 +83,43 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
         self.assertEqual(metadata["identity_drift"]["status"], "passed")
         self.assertTrue(metadata["identity_drift"]["passed"])
         self.assertEqual(metadata["identity_drift"]["score"], 0.94)
+
+    def test_evaluates_and_records_normalized_provider_output(self):
+        result = evaluate_and_record_identity_drift(
+            self.shot["id"],
+            self.media["id"],
+            IdentityDriftEvaluationRequest(
+                identity_similarity=0.91,
+                flags=["lighting_changed", "lighting_changed"],
+                evidence={"reference_media_id": 7},
+                provider="vision-adapter",
+                model="identity-v2",
+            ),
+        )
+
+        assessment = result["media"]["metadata"]["identity_drift"]
+        self.assertEqual(assessment["status"], "passed")
+        self.assertTrue(assessment["passed"])
+        self.assertEqual(assessment["identity_similarity"], 0.91)
+        self.assertEqual(assessment["flags"], ["lighting_changed"])
+        self.assertEqual(assessment["evidence"]["reference_media_id"], 7)
+        self.assertEqual(assessment["provider"], "vision-adapter")
+        self.assertEqual(assessment["model"], "identity-v2")
+
+    def test_evaluation_blocks_critical_identity_flag(self):
+        result = evaluate_and_record_identity_drift(
+            self.shot["id"],
+            self.media["id"],
+            IdentityDriftEvaluationRequest(
+                identity_similarity=0.99,
+                flags=["different_person"],
+            ),
+        )
+
+        assessment = result["media"]["metadata"]["identity_drift"]
+        self.assertEqual(assessment["status"], "blocked")
+        self.assertFalse(assessment["passed"])
+        self.assertEqual(assessment["blocking_flags"], ["different_person"])
 
     def test_rejects_inconsistent_passed_outcome(self):
         with self.assertRaises(ValidationError):
