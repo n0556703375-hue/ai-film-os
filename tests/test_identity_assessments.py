@@ -8,6 +8,7 @@ from app.api.identity_assessments import (
     IdentityDriftAssessmentRequest,
     IdentityDriftEvaluationRequest,
     evaluate_and_record_identity_drift,
+    list_pending_identity_drift,
     record_identity_drift,
 )
 from app.core.config import settings
@@ -63,6 +64,47 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
     def tearDown(self):
         settings.database_path = self.original_db
         self.tempdir.cleanup()
+
+    def test_lists_only_pending_image_assessments(self):
+        completed = shots.create_media_result(self.shot["id"], {
+            "media_type": "image",
+            "url": "https://example.com/completed.jpg",
+            "status": "טיוטה",
+            "metadata": {
+                "identity_drift": {"status": "passed", "passed": True},
+            },
+        })
+        shots.create_media_result(self.shot["id"], {
+            "media_type": "video",
+            "url": "https://example.com/video.mp4",
+            "status": "טיוטה",
+            "metadata": {
+                "identity_drift": {"status": "pending", "passed": False},
+            },
+        })
+
+        result = list_pending_identity_drift(limit=50)
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["items"][0]["media_id"], self.media["id"])
+        self.assertEqual(result["items"][0]["shot_id"], self.shot["id"])
+        self.assertNotEqual(result["items"][0]["media_id"], completed["id"])
+
+    def test_pending_assessment_queue_respects_limit(self):
+        second = shots.create_media_result(self.shot["id"], {
+            "media_type": "image",
+            "url": "https://example.com/generated-2.jpg",
+            "status": "טיוטה",
+            "metadata": {
+                "identity_drift": {"status": "pending", "passed": False},
+            },
+        })
+
+        result = list_pending_identity_drift(limit=1)
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["items"][0]["media_id"], self.media["id"])
+        self.assertNotEqual(result["items"][0]["media_id"], second["id"])
 
     def test_records_passed_assessment_without_losing_provider_metadata(self):
         result = record_identity_drift(
