@@ -254,6 +254,11 @@ def magnific_task(shot_id: int, task_id: str):
                     "metadata": {
                         "magnific_task_id": task_id,
                         "has_nsfw": task.get("has_nsfw", []),
+                        "identity_drift": {
+                            "status": "pending",
+                            "passed": False,
+                            "reasons": ["Identity drift assessment has not run yet."],
+                        },
                     },
                 },
             )

@@ -68,6 +68,8 @@ class ImageGenerationPollingTests(unittest.TestCase):
         self.assertEqual(len(shots.list_media_results(self.shot["id"])), 1)
         self.assertEqual(shots.get_shot(self.shot["id"])["status"], "תמונת טיוטה")
         self.assertEqual(first["media"]["metadata"]["magnific_task_id"], "task-123")
+        self.assertEqual(first["media"]["metadata"]["identity_drift"]["status"], "pending")
+        self.assertFalse(first["media"]["metadata"]["identity_drift"]["passed"])
 
 
 if __name__ == "__main__":
