@@ -1,4 +1,8 @@
+from app.services.scene_reference_propagation import apply_scene_asset_variants
+
+
 def build_prompt(shot: dict) -> str:
+    shot = apply_scene_asset_variants(shot)
     assets = shot.get("assets", [])
     characters = [a for a in assets if a["asset_type"] == "דמות"]
     locations = [a for a in assets if a["asset_type"] == "לוקיישן"]
