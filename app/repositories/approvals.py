@@ -1,3 +1,4 @@
+import json
 from contextlib import closing
 
 from app.database.connection import get_connection
@@ -36,6 +37,28 @@ def _shot_status_for_media(conn, shot_id: int) -> str:
     return "פרומפט מוכן"
 
 
+def _identity_drift_blocker(metadata):
+    if not metadata:
+        return None
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(metadata, dict):
+        return None
+
+    assessment = metadata.get("identity_drift")
+    if not isinstance(assessment, dict):
+        return None
+    if assessment.get("passed") is False or assessment.get("status") == "blocked":
+        reasons = assessment.get("reasons") or []
+        if isinstance(reasons, list) and reasons:
+            return " ".join(str(reason) for reason in reasons if str(reason).strip())
+        return "בדיקת זהות הדמות נכשלה."
+    return None
+
+
 def decide_media(shot_id: int, media_id: int, decision: str, notes: str = ""):
     if decision not in {"approve", "reject"}:
         raise ValueError("החלטת האישור אינה תקינה.")
@@ -49,6 +72,11 @@ def decide_media(shot_id: int, media_id: int, decision: str, notes: str = ""):
         ).fetchone()
         if not media:
             raise ValueError("תוצאת המדיה אינה שייכת לשוט.")
+
+        if decision == "approve" and media["media_type"] == "image":
+            blocker = _identity_drift_blocker(media["metadata"])
+            if blocker:
+                raise ValueError(f"לא ניתן לאשר תמונה עם סטיית זהות חסומה: {blocker}")
 
         if decision == "approve" and media["media_type"] == "video":
             approved_image = conn.execute(
