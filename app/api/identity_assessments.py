@@ -2,7 +2,7 @@ import json
 from contextlib import closing
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
 from app.database.connection import get_connection
@@ -72,6 +72,41 @@ def _store_identity_drift(shot_id: int, media_id: int, assessment: dict[str, Any
     result = dict(updated)
     result["metadata"] = json.loads(result["metadata_json"] or "{}")
     return {"shot_id": shot_id, "media": result}
+
+
+@router.get("/identity-drift/pending")
+def list_pending_identity_drift(
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    with closing(get_connection()) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, shot_id, url, metadata_json
+            FROM media_results
+            WHERE media_type='image'
+            ORDER BY id ASC
+            """
+        ).fetchall()
+
+    pending = []
+    for row in rows:
+        try:
+            metadata = json.loads(row["metadata_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        assessment = metadata.get("identity_drift")
+        if not isinstance(assessment, dict) or assessment.get("status") != "pending":
+            continue
+        pending.append({
+            "media_id": row["id"],
+            "shot_id": row["shot_id"],
+            "url": row["url"],
+            "identity_drift": assessment,
+        })
+        if len(pending) >= limit:
+            break
+
+    return {"items": pending, "count": len(pending)}
 
 
 @router.post("/{shot_id}/media/{media_id}/identity-drift")
