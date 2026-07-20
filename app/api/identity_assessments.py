@@ -1,6 +1,6 @@
 import json
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -48,7 +48,6 @@ class IdentityDriftEvaluationRequest(BaseModel):
 
 class IdentityDriftClaimRequest(BaseModel):
     worker_id: str = Field(min_length=1, max_length=200)
-
 
 
 def _store_identity_drift(shot_id: int, media_id: int, assessment: dict[str, Any]):
@@ -113,6 +112,68 @@ def list_pending_identity_drift(
             break
 
     return {"items": pending, "count": len(pending)}
+
+
+@router.post("/identity-drift/requeue-stale")
+def requeue_stale_identity_drift(
+    max_age_minutes: int = Query(default=30, ge=1, le=1440),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    now = datetime.now(timezone.utc)
+    stale_before = now - timedelta(minutes=max_age_minutes)
+    requeued = []
+
+    with closing(get_connection()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            """
+            SELECT id, shot_id, metadata_json
+            FROM media_results
+            WHERE media_type='image'
+            ORDER BY id ASC
+            """
+        ).fetchall()
+
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                continue
+            assessment = metadata.get("identity_drift")
+            if not isinstance(assessment, dict) or assessment.get("status") != "running":
+                continue
+
+            claimed_at_raw = assessment.get("claimed_at")
+            try:
+                claimed_at = datetime.fromisoformat(claimed_at_raw)
+            except (TypeError, ValueError):
+                continue
+            if claimed_at.tzinfo is None:
+                claimed_at = claimed_at.replace(tzinfo=timezone.utc)
+            if claimed_at.astimezone(timezone.utc) > stale_before:
+                continue
+
+            pending = dict(assessment)
+            pending.update({
+                "status": "pending",
+                "passed": False,
+                "requeued_at": now.isoformat(),
+                "reasons": ["Previous worker claim expired before completion."],
+            })
+            pending.pop("worker_id", None)
+            pending.pop("claimed_at", None)
+            metadata["identity_drift"] = pending
+            conn.execute(
+                "UPDATE media_results SET metadata_json=? WHERE id=?",
+                (json.dumps(metadata, ensure_ascii=False), row["id"]),
+            )
+            requeued.append({"media_id": row["id"], "shot_id": row["shot_id"]})
+            if len(requeued) >= limit:
+                break
+
+        conn.commit()
+
+    return {"items": requeued, "count": len(requeued)}
 
 
 @router.post("/{shot_id}/media/{media_id}/identity-drift/claim")
