@@ -2,11 +2,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.api.identity_assessments import (
     IdentityDriftAssessmentRequest,
+    IdentityDriftClaimRequest,
     IdentityDriftEvaluationRequest,
+    claim_identity_drift,
     evaluate_and_record_identity_drift,
     list_pending_identity_drift,
     record_identity_drift,
@@ -105,6 +108,30 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["items"][0]["media_id"], self.media["id"])
         self.assertNotEqual(result["items"][0]["media_id"], second["id"])
+
+    def test_claim_marks_pending_assessment_running(self):
+        result = claim_identity_drift(
+            self.shot["id"],
+            self.media["id"],
+            IdentityDriftClaimRequest(worker_id="identity-worker-1"),
+        )
+
+        assessment = result["identity_drift"]
+        self.assertEqual(assessment["status"], "running")
+        self.assertFalse(assessment["passed"])
+        self.assertEqual(assessment["worker_id"], "identity-worker-1")
+        self.assertEqual(assessment["attempt"], 1)
+        self.assertTrue(assessment["claimed_at"].endswith("+00:00"))
+        self.assertEqual(list_pending_identity_drift(limit=50)["count"], 0)
+
+    def test_claim_rejects_duplicate_worker_pickup(self):
+        request = IdentityDriftClaimRequest(worker_id="identity-worker-1")
+        claim_identity_drift(self.shot["id"], self.media["id"], request)
+
+        with self.assertRaises(HTTPException) as context:
+            claim_identity_drift(self.shot["id"], self.media["id"], request)
+
+        self.assertEqual(context.exception.status_code, 409)
 
     def test_records_passed_assessment_without_losing_provider_metadata(self):
         result = record_identity_drift(
