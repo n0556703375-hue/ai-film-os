@@ -1,5 +1,8 @@
+import json
 import tempfile
 import unittest
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -13,9 +16,10 @@ from app.api.identity_assessments import (
     evaluate_and_record_identity_drift,
     list_pending_identity_drift,
     record_identity_drift,
+    requeue_stale_identity_drift,
 )
 from app.core.config import settings
-from app.database.connection import init_db
+from app.database.connection import get_connection, init_db
 from app.repositories import projects, scenes, shots
 
 
@@ -67,6 +71,20 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
     def tearDown(self):
         settings.database_path = self.original_db
         self.tempdir.cleanup()
+
+    def _set_claimed_at(self, media_id: int, claimed_at: datetime):
+        with closing(get_connection()) as conn:
+            row = conn.execute(
+                "SELECT metadata_json FROM media_results WHERE id=?",
+                (media_id,),
+            ).fetchone()
+            metadata = json.loads(row["metadata_json"] or "{}")
+            metadata["identity_drift"]["claimed_at"] = claimed_at.isoformat()
+            conn.execute(
+                "UPDATE media_results SET metadata_json=? WHERE id=?",
+                (json.dumps(metadata), media_id),
+            )
+            conn.commit()
 
     def test_lists_only_pending_image_assessments(self):
         completed = shots.create_media_result(self.shot["id"], {
@@ -132,6 +150,77 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
             claim_identity_drift(self.shot["id"], self.media["id"], request)
 
         self.assertEqual(context.exception.status_code, 409)
+
+    def test_requeues_only_expired_running_assessments(self):
+        claim_identity_drift(
+            self.shot["id"],
+            self.media["id"],
+            IdentityDriftClaimRequest(worker_id="stale-worker"),
+        )
+        self._set_claimed_at(
+            self.media["id"],
+            datetime.now(timezone.utc) - timedelta(minutes=45),
+        )
+        recent = shots.create_media_result(self.shot["id"], {
+            "media_type": "image",
+            "url": "https://example.com/recent.jpg",
+            "status": "טיוטה",
+            "metadata": {
+                "identity_drift": {
+                    "status": "running",
+                    "passed": False,
+                    "worker_id": "recent-worker",
+                    "claimed_at": datetime.now(timezone.utc).isoformat(),
+                    "attempt": 1,
+                },
+            },
+        })
+
+        result = requeue_stale_identity_drift(max_age_minutes=30, limit=50)
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["items"][0]["media_id"], self.media["id"])
+        pending = list_pending_identity_drift(limit=50)
+        self.assertEqual(pending["count"], 1)
+        assessment = pending["items"][0]["identity_drift"]
+        self.assertEqual(assessment["status"], "pending")
+        self.assertEqual(assessment["attempt"], 1)
+        self.assertNotIn("worker_id", assessment)
+        self.assertNotIn("claimed_at", assessment)
+        self.assertNotEqual(result["items"][0]["media_id"], recent["id"])
+
+    def test_requeue_respects_limit(self):
+        claim_identity_drift(
+            self.shot["id"],
+            self.media["id"],
+            IdentityDriftClaimRequest(worker_id="worker-1"),
+        )
+        self._set_claimed_at(
+            self.media["id"],
+            datetime.now(timezone.utc) - timedelta(minutes=60),
+        )
+        second = shots.create_media_result(self.shot["id"], {
+            "media_type": "image",
+            "url": "https://example.com/stale-2.jpg",
+            "status": "טיוטה",
+            "metadata": {
+                "identity_drift": {
+                    "status": "running",
+                    "passed": False,
+                    "worker_id": "worker-2",
+                    "claimed_at": (
+                        datetime.now(timezone.utc) - timedelta(minutes=60)
+                    ).isoformat(),
+                    "attempt": 1,
+                },
+            },
+        })
+
+        result = requeue_stale_identity_drift(max_age_minutes=30, limit=1)
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["items"][0]["media_id"], self.media["id"])
+        self.assertNotEqual(result["items"][0]["media_id"], second["id"])
 
     def test_records_passed_assessment_without_losing_provider_metadata(self):
         result = record_identity_drift(
