@@ -1,8 +1,21 @@
+from app.repositories import projects
 from app.services.scene_reference_propagation import apply_scene_asset_variants
+
+
+def _production_bible(shot: dict) -> tuple[str, str]:
+    project_id = shot.get("project_id")
+    if not project_id:
+        return "", ""
+    project = projects.get_project(int(project_id)) or {}
+    return (
+        str(project.get("visual_style") or "").strip(),
+        str(project.get("rules") or "").strip(),
+    )
 
 
 def build_prompt(shot: dict) -> str:
     shot = apply_scene_asset_variants(shot)
+    visual_style, global_rules = _production_bible(shot)
     assets = shot.get("assets", [])
     characters = [a for a in assets if a["asset_type"] == "דמות"]
     locations = [a for a in assets if a["asset_type"] == "לוקיישן"]
@@ -19,6 +32,11 @@ def build_prompt(shot: dict) -> str:
         )
 
     return f"""CINEMATIC AI PRODUCTION PROMPT
+
+PRODUCTION BIBLE — MANDATORY FOR THIS SHOT
+Visual style: {visual_style or 'Use the established project visual language consistently.'}
+Global rules: {global_rules or 'No additional project-wide restrictions were specified.'}
+These project-wide rules override generic model defaults and must remain visible in foreground, background, reflections, crowds, costumes, dialogue and incidental details.
 
 SHOT
 Title: {shot['title']}
