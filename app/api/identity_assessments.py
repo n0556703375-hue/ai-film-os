@@ -1,5 +1,6 @@
 import json
 from contextlib import closing
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
@@ -43,6 +44,11 @@ class IdentityDriftEvaluationRequest(BaseModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
     provider: str = Field(default="", max_length=200)
     model: str = Field(default="", max_length=200)
+
+
+class IdentityDriftClaimRequest(BaseModel):
+    worker_id: str = Field(min_length=1, max_length=200)
+
 
 
 def _store_identity_drift(shot_id: int, media_id: int, assessment: dict[str, Any]):
@@ -107,6 +113,54 @@ def list_pending_identity_drift(
             break
 
     return {"items": pending, "count": len(pending)}
+
+
+@router.post("/{shot_id}/media/{media_id}/identity-drift/claim")
+def claim_identity_drift(
+    shot_id: int,
+    media_id: int,
+    request: IdentityDriftClaimRequest,
+):
+    with closing(get_connection()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        media = conn.execute(
+            "SELECT * FROM media_results WHERE id=? AND shot_id=?",
+            (media_id, shot_id),
+        ).fetchone()
+        if not media:
+            raise HTTPException(404, "תוצאת המדיה לא נמצאה בשוט.")
+        if media["media_type"] != "image":
+            raise HTTPException(409, "בדיקת Identity Drift זמינה לתמונות בלבד.")
+
+        try:
+            metadata = json.loads(media["metadata_json"] or "{}")
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise HTTPException(409, "נתוני בדיקת הזהות אינם תקינים.") from exc
+        assessment = metadata.get("identity_drift")
+        if not isinstance(assessment, dict) or assessment.get("status") != "pending":
+            raise HTTPException(409, "בדיקת הזהות כבר נאספה או הושלמה.")
+
+        claimed = dict(assessment)
+        claimed.update({
+            "status": "running",
+            "passed": False,
+            "worker_id": request.worker_id.strip(),
+            "claimed_at": datetime.now(timezone.utc).isoformat(),
+            "attempt": int(assessment.get("attempt") or 0) + 1,
+        })
+        metadata["identity_drift"] = claimed
+        conn.execute(
+            "UPDATE media_results SET metadata_json=? WHERE id=?",
+            (json.dumps(metadata, ensure_ascii=False), media_id),
+        )
+        conn.commit()
+
+    return {
+        "media_id": media_id,
+        "shot_id": shot_id,
+        "url": media["url"],
+        "identity_drift": claimed,
+    }
 
 
 @router.post("/{shot_id}/media/{media_id}/identity-drift")
