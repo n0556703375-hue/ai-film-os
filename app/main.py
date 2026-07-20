@@ -19,6 +19,7 @@ from app.api.video_generation import router as video_generation_router
 from app.api.approvals import router as approvals_router
 from app.api.jobs import router as jobs_router
 from app.api.integrations import router as integrations_router
+from app.api.identity_assessments import router as identity_assessments_router
 from app.core.config import settings
 from app.core.version import APP_VERSION
 
@@ -50,6 +51,7 @@ app.include_router(video_generation_router)
 app.include_router(approvals_router)
 app.include_router(jobs_router)
 app.include_router(integrations_router)
+app.include_router(identity_assessments_router)
 
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount("/generated", StaticFiles(directory=settings.generated_media_path), name="generated")
