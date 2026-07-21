@@ -14,6 +14,19 @@ class DatabaseBackendTests(unittest.TestCase):
         self.assertEqual(backend.name, "sqlite")
         self.assertEqual(backend.database_path, Path("film_os.db"))
 
+    def test_factory_rejects_postgresql_until_backend_is_implemented(self):
+        database_url = "postgresql://user:secret@example.test/film_os"
+
+        with self.assertRaisesRegex(RuntimeError, "PostgreSQL backend is not implemented") as error:
+            build_database_backend(Path("film_os.db"), database_url)
+
+        self.assertNotIn(database_url, str(error.exception))
+        self.assertNotIn("secret", str(error.exception))
+
+    def test_factory_rejects_unknown_database_url_scheme(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported database URL scheme: mysql"):
+            build_database_backend(Path("film_os.db"), "mysql://example.test/film_os")
+
     def test_sqlite_connection_enables_foreign_keys_and_row_access(self):
         with tempfile.TemporaryDirectory() as directory:
             backend = SQLiteBackend(Path(directory) / "test.db")
