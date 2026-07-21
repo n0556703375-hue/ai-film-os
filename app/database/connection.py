@@ -8,7 +8,10 @@ from app.database.seed import seed_database
 
 
 def get_connection() -> sqlite3.Connection:
-    return build_database_backend(settings.database_path).connect()
+    return build_database_backend(
+        settings.database_path,
+        settings.database_url,
+    ).connect()
 
 
 def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:

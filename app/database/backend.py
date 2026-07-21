@@ -2,6 +2,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlparse
 
 
 class DatabaseBackend(Protocol):
@@ -25,12 +26,25 @@ class SQLiteBackend:
         return conn
 
 
-def build_database_backend(database_path: Path) -> DatabaseBackend:
+def build_database_backend(
+    database_path: Path,
+    database_url: str = "",
+) -> DatabaseBackend:
     """Build the configured backend while SQLite remains the safe default.
 
-    PostgreSQL support will be added behind this boundary in a separate,
-    focused change. This function deliberately performs no environment logging
-    and does not alter existing database selection behavior.
+    A configured PostgreSQL URL is recognized but rejected until the concrete
+    backend and compatible migrations are implemented. The URL is never
+    included in the error message, preventing accidental credential exposure.
     """
 
-    return SQLiteBackend(database_path=database_path)
+    normalized_url = database_url.strip()
+    if not normalized_url:
+        return SQLiteBackend(database_path=database_path)
+
+    scheme = urlparse(normalized_url).scheme.lower()
+    if scheme in {"postgres", "postgresql"}:
+        raise RuntimeError(
+            "PostgreSQL is configured but the PostgreSQL backend is not implemented yet."
+        )
+
+    raise ValueError(f"Unsupported database URL scheme: {scheme or '<missing>'}.")
