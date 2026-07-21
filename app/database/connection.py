@@ -1,23 +1,26 @@
 import sqlite3
 from contextlib import closing
+
 from app.core.config import settings
+from app.database.backend import build_database_backend
 from app.database.schema import SCHEMA_SQL
 from app.database.seed import seed_database
 
+
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(settings.database_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    return build_database_backend(settings.database_path).connect()
+
 
 def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return any(row["name"] == column for row in rows)
 
+
 def _add_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
     for name, definition in columns.items():
         if not _column_exists(conn, table, name):
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
 
 def migrate_database(conn: sqlite3.Connection) -> None:
     _add_columns(conn, "shots", {
@@ -77,6 +80,7 @@ def migrate_database(conn: sqlite3.Connection) -> None:
         SET status=CASE WHEN resolved=1 THEN 'נפתר' ELSE 'פתוח' END
         WHERE status='' OR status IS NULL
     """)
+
 
 def init_db() -> None:
     with closing(get_connection()) as conn:
