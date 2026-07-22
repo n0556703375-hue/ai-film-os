@@ -16,6 +16,16 @@ _TABLE_PATTERN = re.compile(
 EXPECTED_TABLES = frozenset(_TABLE_PATTERN.findall(POSTGRES_SCHEMA_SQL))
 
 
+def _schema_statements() -> tuple[str, ...]:
+    """Return executable DDL statements without relying on multi-command execution."""
+
+    return tuple(
+        statement.strip()
+        for statement in POSTGRES_SCHEMA_SQL.split(";")
+        if statement.strip()
+    )
+
+
 def validate_postgres_schema(
     database_url: str,
     *,
@@ -28,7 +38,8 @@ def validate_postgres_schema(
 
     try:
         with connection.cursor() as cursor:
-            cursor.execute(POSTGRES_SCHEMA_SQL)
+            for statement in _schema_statements():
+                cursor.execute(statement)
             cursor.execute(
                 """
                 SELECT table_name
