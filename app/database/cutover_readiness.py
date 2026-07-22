@@ -14,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from app.database.migration_preflight import EXPECTED_TABLES
 from app.database.postgres_import_dry_run import dry_run_sqlite_to_postgres
 from app.database.sqlite_backup_verification import verify_sqlite_backup
 
@@ -63,6 +64,22 @@ def assess_cutover_readiness(
 
     backup_counts = backup.get("source_row_counts")
     validation_counts = validation.get("row_counts")
+    expected_tables = set(EXPECTED_TABLES)
+    backup_tables = set(backup_counts) if isinstance(backup_counts, dict) else set()
+    validation_tables = (
+        set(validation_counts) if isinstance(validation_counts, dict) else set()
+    )
+    if backup_tables != expected_tables or validation_tables != expected_tables:
+        return {
+            "status": "blocked",
+            "reason": "validation_contract_incomplete",
+            "backup_verified": True,
+            "import_validated": True,
+            "missing_backup_tables": sorted(expected_tables - backup_tables),
+            "missing_validation_tables": sorted(expected_tables - validation_tables),
+            "persistent_changes": False,
+        }
+
     if backup_counts != validation_counts:
         return {
             "status": "blocked",
@@ -76,7 +93,7 @@ def assess_cutover_readiness(
         "status": "ready",
         "backup_verified": True,
         "import_validated": True,
-        "table_count": validation.get("table_count", len(validation_counts or {})),
+        "table_count": len(EXPECTED_TABLES),
         "row_counts": validation_counts,
         "constraints_validated": True,
         "rollback_confirmed": True,

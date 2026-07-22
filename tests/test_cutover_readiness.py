@@ -2,6 +2,7 @@ import unittest
 from pathlib import Path
 
 from app.database.cutover_readiness import assess_cutover_readiness
+from app.database.migration_preflight import EXPECTED_TABLES
 
 
 class CutoverReadinessTests(unittest.TestCase):
@@ -9,7 +10,8 @@ class CutoverReadinessTests(unittest.TestCase):
         self.source = Path("source.db")
         self.backup = Path("backup.db")
         self.url = "postgresql://user:secret@example.invalid/film_os"
-        self.counts = {"projects": 2, "scenes": 4}
+        self.counts = {table: 0 for table in EXPECTED_TABLES}
+        self.counts.update({"projects": 2, "scenes": 4})
 
     def test_ready_requires_matching_verified_evidence(self):
         result = assess_cutover_readiness(
@@ -23,13 +25,14 @@ class CutoverReadinessTests(unittest.TestCase):
             import_validator=lambda source, url: {
                 "status": "validated",
                 "row_counts": self.counts,
-                "table_count": 2,
+                "table_count": len(EXPECTED_TABLES),
                 "constraints_validated": True,
                 "rolled_back": True,
             },
         )
 
         self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["table_count"], len(EXPECTED_TABLES))
         self.assertTrue(result["backup_verified"])
         self.assertTrue(result["import_validated"])
         self.assertTrue(result["constraints_validated"])
@@ -114,7 +117,33 @@ class CutoverReadinessTests(unittest.TestCase):
         self.assertFalse(result["rollback_confirmed"])
         self.assertFalse(result["persistent_changes"])
 
+    def test_matching_but_incomplete_contract_evidence_blocks_readiness(self):
+        incomplete_counts = {"projects": 2, "scenes": 4}
+        result = assess_cutover_readiness(
+            self.source,
+            self.backup,
+            self.url,
+            backup_verifier=lambda source, backup: {
+                "status": "verified",
+                "source_row_counts": incomplete_counts,
+            },
+            import_validator=lambda source, url: {
+                "status": "validated",
+                "row_counts": incomplete_counts,
+                "constraints_validated": True,
+                "rolled_back": True,
+            },
+        )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason"], "validation_contract_incomplete")
+        self.assertIn("media_jobs", result["missing_backup_tables"])
+        self.assertIn("media_jobs", result["missing_validation_tables"])
+        self.assertFalse(result["persistent_changes"])
+
     def test_mismatched_row_count_evidence_blocks_readiness(self):
+        validation_counts = dict(self.counts)
+        validation_counts["projects"] = 1
         result = assess_cutover_readiness(
             self.source,
             self.backup,
@@ -125,7 +154,7 @@ class CutoverReadinessTests(unittest.TestCase):
             },
             import_validator=lambda source, url: {
                 "status": "validated",
-                "row_counts": {"projects": 1, "scenes": 4},
+                "row_counts": validation_counts,
                 "constraints_validated": True,
                 "rolled_back": True,
             },
