@@ -85,6 +85,13 @@ def dry_run_sqlite_to_postgres(
         connector = postgres_connect or _default_postgres_connect
         target = connector(postgres_url)
         cursor = target.cursor()
+        cursor.execute(
+            "SELECT tablename FROM pg_catalog.pg_tables "
+            "WHERE schemaname = current_schema()"
+        )
+        if cursor.fetchall():
+            raise RuntimeError("PostgreSQL validation target must be empty.")
+
         cursor.execute(POSTGRES_SCHEMA_SQL)
 
         for table in TABLE_ORDER:
