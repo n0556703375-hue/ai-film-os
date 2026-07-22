@@ -36,6 +36,32 @@ jobs:
         env:
           POSTGRES_SCHEMA_VALIDATION_URL: postgresql://film_os_ci:film_os_ci_password@localhost:5432/film_os_validation
         run: python -m app.database.validate_postgres_schema --confirm-rollback-only
+      - name: Validate complete cutover readiness rollback path
+        env:
+          FILM_OS_DB: ci-film-os-source.db
+          FILM_OS_BACKUP_DB: ci-film-os-backup.db
+          POSTGRES_IMPORT_VALIDATION_URL: postgresql://film_os_ci:film_os_ci_password@localhost:5432/film_os_validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$FILM_OS_DB" "$FILM_OS_BACKUP_DB"' EXIT
+          python - <<'PY'
+          import os
+          import sqlite3
+          from pathlib import Path
+
+          from app.database.schema import SCHEMA_SQL
+
+          source_path = Path(os.environ["FILM_OS_DB"])
+          backup_path = Path(os.environ["FILM_OS_BACKUP_DB"])
+
+          with sqlite3.connect(source_path) as source:
+              source.executescript(SCHEMA_SQL)
+              source.commit()
+              with sqlite3.connect(backup_path) as backup:
+                  source.backup(backup)
+          PY
+          python -m app.database.cutover_readiness --confirm-non-destructive
       - name: Run tests
         id: tests
         shell: bash
