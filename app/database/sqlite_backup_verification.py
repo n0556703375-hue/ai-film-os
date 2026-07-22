@@ -84,14 +84,6 @@ def verify_sqlite_backup(
     try:
         source = audit_sqlite_source(source_path, connect=source_factory)
         backup = audit_sqlite_source(backup_path, connect=backup_factory)
-        source_fingerprints = _content_fingerprints(
-            source_path,
-            connect=source_factory,
-        )
-        backup_fingerprints = _content_fingerprints(
-            backup_path,
-            connect=backup_factory,
-        )
     except RuntimeError:
         raise
     except Exception:
@@ -100,7 +92,24 @@ def verify_sqlite_backup(
     source_ready = source["status"] == "ready"
     backup_ready = backup["status"] == "ready"
     counts_match = source["row_counts"] == backup["row_counts"]
-    content_match = source_fingerprints == backup_fingerprints
+    content_match = False
+
+    if source_ready and backup_ready and counts_match:
+        try:
+            source_fingerprints = _content_fingerprints(
+                source_path,
+                connect=source_factory,
+            )
+            backup_fingerprints = _content_fingerprints(
+                backup_path,
+                connect=backup_factory,
+            )
+            content_match = source_fingerprints == backup_fingerprints
+        except RuntimeError:
+            raise
+        except Exception:
+            raise RuntimeError("SQLite backup verification failed.") from None
+
     verified = source_ready and backup_ready and counts_match and content_match
 
     return {
