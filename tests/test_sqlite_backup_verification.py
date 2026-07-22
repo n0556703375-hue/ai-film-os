@@ -17,20 +17,26 @@ class SQLiteBackupVerificationTests(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def _create_contract_database(self, path: Path, project_rows: int = 1) -> None:
+    def _create_contract_database(
+        self,
+        path: Path,
+        project_rows: int = 1,
+        *,
+        project_id_offset: int = 0,
+    ) -> None:
         connection = sqlite3.connect(path)
         try:
             for table in EXPECTED_TABLES:
                 connection.execute(f'CREATE TABLE "{table}" (id INTEGER PRIMARY KEY)')
             connection.executemany(
                 "INSERT INTO projects (id) VALUES (?)",
-                [(index + 1,) for index in range(project_rows)],
+                [(project_id_offset + index + 1,) for index in range(project_rows)],
             )
             connection.commit()
         finally:
             connection.close()
 
-    def test_matching_backup_is_verified_without_exposing_paths(self):
+    def test_matching_backup_is_verified_without_exposing_paths_or_digests(self):
         self._create_contract_database(self.source_path)
         self._create_contract_database(self.backup_path)
 
@@ -40,9 +46,12 @@ class SQLiteBackupVerificationTests(unittest.TestCase):
         self.assertTrue(result["source_ready"])
         self.assertTrue(result["backup_ready"])
         self.assertTrue(result["row_counts_match"])
+        self.assertTrue(result["content_match"])
         self.assertTrue(result["read_only"])
         self.assertNotIn(str(self.source_path), str(result))
         self.assertNotIn(str(self.backup_path), str(result))
+        self.assertNotIn("fingerprint", str(result).lower())
+        self.assertNotIn("sha256", str(result).lower())
 
     def test_row_count_difference_blocks_cutover(self):
         self._create_contract_database(self.source_path, project_rows=2)
@@ -53,6 +62,16 @@ class SQLiteBackupVerificationTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked")
         self.assertFalse(result["row_counts_match"])
 
+    def test_equal_row_counts_with_different_content_blocks_cutover(self):
+        self._create_contract_database(self.source_path, project_id_offset=0)
+        self._create_contract_database(self.backup_path, project_id_offset=100)
+
+        result = verify_sqlite_backup(self.source_path, self.backup_path)
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertTrue(result["row_counts_match"])
+        self.assertFalse(result["content_match"])
+
     def test_incomplete_backup_blocks_cutover(self):
         self._create_contract_database(self.source_path)
         connection = sqlite3.connect(self.backup_path)
@@ -60,10 +79,8 @@ class SQLiteBackupVerificationTests(unittest.TestCase):
         connection.commit()
         connection.close()
 
-        result = verify_sqlite_backup(self.source_path, self.backup_path)
-
-        self.assertEqual(result["status"], "blocked")
-        self.assertFalse(result["backup_ready"])
+        with self.assertRaisesRegex(RuntimeError, "table has no columns"):
+            verify_sqlite_backup(self.source_path, self.backup_path)
 
     def test_source_and_backup_must_be_different_files(self):
         self._create_contract_database(self.source_path)
