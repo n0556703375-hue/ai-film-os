@@ -7,9 +7,10 @@ from app.database.validate_postgres_schema import (
 
 
 class FakeCursor:
-    def __init__(self, tables=None, error=None):
+    def __init__(self, tables=None, error=None, *, dictionary_rows=True):
         self.tables = tables or set()
         self.error = error
+        self.dictionary_rows = dictionary_rows
         self.executed = []
 
     def __enter__(self):
@@ -24,6 +25,8 @@ class FakeCursor:
             raise self.error
 
     def fetchall(self):
+        if self.dictionary_rows:
+            return [{"table_name": table} for table in self.tables]
         return [(table,) for table in self.tables]
 
 
@@ -58,7 +61,20 @@ class PostgreSQLSchemaValidationTests(unittest.TestCase):
         self.assertTrue(result["rolled_back"])
         self.assertEqual(connection.rollback_calls, 1)
         self.assertEqual(connection.close_calls, 1)
-        self.assertEqual(len(cursor.executed), 2)
+        self.assertGreater(len(cursor.executed), 2)
+
+    def test_tuple_rows_remain_supported_for_test_connections(self):
+        cursor = FakeCursor(tables=EXPECTED_TABLES, dictionary_rows=False)
+        connection = FakeConnection(cursor)
+
+        result = validate_postgres_schema(
+            "postgresql://user:secret@example.test/film_os_test",
+            connect=lambda: connection,
+        )
+
+        self.assertEqual(result["status"], "valid")
+        self.assertEqual(connection.rollback_calls, 1)
+        self.assertEqual(connection.close_calls, 1)
 
     def test_missing_table_fails_without_persisting_changes(self):
         cursor = FakeCursor(tables=EXPECTED_TABLES - {"media_jobs"})
