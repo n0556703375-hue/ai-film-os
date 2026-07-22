@@ -14,16 +14,24 @@ from app.database.postgres_import_dry_run import (
 class FakePostgresCursor:
     def __init__(self):
         self.counts = {table: 0 for table in TABLE_ORDER}
+        self.existing_tables = []
         self._row = None
+        self._rows = []
         self.constraints_checked = False
 
     def execute(self, statement, params=None):
         normalized = statement.strip()
-        count_match = re.fullmatch(r'SELECT COUNT\(\*\) FROM "([A-Za-z_][A-Za-z0-9_]*)"', normalized)
-        if count_match:
-            self._row = (self.counts[count_match.group(1)],)
-        elif normalized == "SET CONSTRAINTS ALL IMMEDIATE":
-            self.constraints_checked = True
+        if normalized.startswith("SELECT tablename FROM pg_catalog.pg_tables"):
+            self._rows = [(table,) for table in self.existing_tables]
+        else:
+            count_match = re.fullmatch(
+                r'SELECT COUNT\(\*\) FROM "([A-Za-z_][A-Za-z0-9_]*)"',
+                normalized,
+            )
+            if count_match:
+                self._row = (self.counts[count_match.group(1)],)
+            elif normalized == "SET CONSTRAINTS ALL IMMEDIATE":
+                self.constraints_checked = True
         return self
 
     def executemany(self, statement, rows):
@@ -34,6 +42,9 @@ class FakePostgresCursor:
 
     def fetchone(self):
         return self._row
+
+    def fetchall(self):
+        return self._rows
 
 
 class FakePostgresConnection:
@@ -87,7 +98,7 @@ class PostgresImportDryRunTests(unittest.TestCase):
         self.assertEqual(target.rollback_calls, 1)
         self.assertEqual(target.close_calls, 1)
 
-    def test_nonempty_target_fails_and_rolls_back(self):
+    def test_nonempty_contract_table_fails_and_rolls_back(self):
         target = FakePostgresConnection()
         target.cursor_instance.counts["projects"] = 1
 
@@ -99,6 +110,22 @@ class PostgresImportDryRunTests(unittest.TestCase):
                 postgres_connect=lambda _url: target,
             )
 
+        self.assertEqual(target.rollback_calls, 1)
+        self.assertEqual(target.close_calls, 1)
+
+    def test_any_preexisting_table_blocks_before_schema_application(self):
+        target = FakePostgresConnection()
+        target.cursor_instance.existing_tables = ["unrelated_app_table"]
+
+        with self.assertRaisesRegex(RuntimeError, "must be empty"):
+            dry_run_sqlite_to_postgres(
+                self.database_path,
+                "postgresql://validation-host/film_os",
+                sqlite_connect=self._sqlite_connect,
+                postgres_connect=lambda _url: target,
+            )
+
+        self.assertFalse(target.cursor_instance.constraints_checked)
         self.assertEqual(target.rollback_calls, 1)
         self.assertEqual(target.close_calls, 1)
 
