@@ -48,6 +48,19 @@ def assess_cutover_readiness(
             "persistent_changes": False,
         }
 
+    constraints_validated = validation.get("constraints_validated") is True
+    rollback_confirmed = validation.get("rolled_back") is True
+    if not constraints_validated or not rollback_confirmed:
+        return {
+            "status": "blocked",
+            "reason": "validation_integrity_incomplete",
+            "backup_verified": True,
+            "import_validated": True,
+            "constraints_validated": constraints_validated,
+            "rollback_confirmed": rollback_confirmed,
+            "persistent_changes": False,
+        }
+
     backup_counts = backup.get("source_row_counts")
     validation_counts = validation.get("row_counts")
     if backup_counts != validation_counts:
@@ -65,8 +78,8 @@ def assess_cutover_readiness(
         "import_validated": True,
         "table_count": validation.get("table_count", len(validation_counts or {})),
         "row_counts": validation_counts,
-        "constraints_validated": bool(validation.get("constraints_validated")),
-        "rollback_confirmed": bool(validation.get("rolled_back")),
+        "constraints_validated": True,
+        "rollback_confirmed": True,
         "persistent_changes": False,
     }
 
