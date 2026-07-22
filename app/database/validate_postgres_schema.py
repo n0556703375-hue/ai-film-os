@@ -3,7 +3,7 @@
 import argparse
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from app.database.backend import PostgreSQLBackend
@@ -24,6 +24,14 @@ def _schema_statements() -> tuple[str, ...]:
         for statement in POSTGRES_SCHEMA_SQL.split(";")
         if statement.strip()
     )
+
+
+def _table_name(row: Any) -> str:
+    """Read a table name from psycopg dictionary rows or test tuple rows."""
+
+    if isinstance(row, Mapping):
+        return str(row["table_name"])
+    return str(row[0])
 
 
 def validate_postgres_schema(
@@ -47,7 +55,7 @@ def validate_postgres_schema(
                 WHERE table_schema = current_schema()
                 """
             )
-            actual_tables = {row[0] for row in cursor.fetchall()}
+            actual_tables = {_table_name(row) for row in cursor.fetchall()}
 
         missing_tables = sorted(EXPECTED_TABLES - actual_tables)
         if missing_tables:
