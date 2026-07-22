@@ -61,6 +61,7 @@ class SQLiteBackupVerificationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "blocked")
         self.assertFalse(result["row_counts_match"])
+        self.assertFalse(result["content_match"])
 
     def test_equal_row_counts_with_different_content_blocks_cutover(self):
         self._create_contract_database(self.source_path, project_id_offset=0)
@@ -79,8 +80,11 @@ class SQLiteBackupVerificationTests(unittest.TestCase):
         connection.commit()
         connection.close()
 
-        with self.assertRaisesRegex(RuntimeError, "table has no columns"):
-            verify_sqlite_backup(self.source_path, self.backup_path)
+        result = verify_sqlite_backup(self.source_path, self.backup_path)
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertFalse(result["backup_ready"])
+        self.assertFalse(result["content_match"])
 
     def test_source_and_backup_must_be_different_files(self):
         self._create_contract_database(self.source_path)
