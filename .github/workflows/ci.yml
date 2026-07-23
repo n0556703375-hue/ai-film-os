@@ -82,7 +82,48 @@ jobs:
           backup_path = Path(os.environ["FILM_OS_BACKUP_DB"])
 
           with sqlite3.connect(source_path) as source:
+              source.execute("PRAGMA foreign_keys = ON")
               source.executescript(SCHEMA_SQL)
+              source.execute(
+                  "INSERT INTO projects (id, name, description, visual_style, rules) "
+                  "VALUES (?, ?, ?, ?, ?)",
+                  (101, "CI Film", "non-empty migration fixture", "cold cinematic", "women-only cast"),
+              )
+              source.execute(
+                  "INSERT INTO scenes (id, project_id, scene_number, title, story_goal) "
+                  "VALUES (?, ?, ?, ?, ?)",
+                  (201, 101, 1, "Opening", "establish the production world"),
+              )
+              source.execute(
+                  "INSERT INTO shots (id, project_id, scene_id, shot_number, title, prompt) "
+                  "VALUES (?, ?, ?, ?, ?, ?)",
+                  (301, 101, 201, 1, "Establishing shot", "wide cinematic production office"),
+              )
+              source.execute(
+                  "INSERT INTO assets (id, project_id, asset_type, name, lock_status, version) "
+                  "VALUES (?, ?, ?, ?, ?, ?)",
+                  (401, 101, "location", "Production Office", "locked", 2),
+              )
+              source.execute(
+                  "INSERT INTO shot_assets (shot_id, asset_id) VALUES (?, ?)",
+                  (301, 401),
+              )
+              source.execute(
+                  "INSERT INTO prompt_versions (id, shot_id, version, prompt) VALUES (?, ?, ?, ?)",
+                  (501, 301, 1, "wide cinematic production office"),
+              )
+              source.execute(
+                  "INSERT INTO media_results "
+                  "(id, shot_id, media_type, version, url, provider, model, prompt_version_id, status) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  (601, 301, "image", 1, "https://example.invalid/ci-image.png", "CI", "fixture", 501, "approved"),
+              )
+              source.execute(
+                  "INSERT INTO approval_events "
+                  "(id, shot_id, media_result_id, event_type, from_status, to_status) "
+                  "VALUES (?, ?, ?, ?, ?, ?)",
+                  (701, 301, 601, "approve_image", "draft", "approved"),
+              )
               source.commit()
               with sqlite3.connect(backup_path) as backup:
                   source.backup(backup)
@@ -95,6 +136,20 @@ jobs:
 
           from app.database.postgres_import_dry_run import TABLE_ORDER
 
+          expected_counts = {
+              "projects": 1,
+              "scenes": 1,
+              "shots": 1,
+              "assets": 1,
+              "shot_assets": 1,
+              "asset_reference_images": 0,
+              "continuity_issues": 0,
+              "prompt_versions": 1,
+              "media_results": 1,
+              "approval_events": 1,
+              "media_jobs": 0,
+          }
+
           with psycopg.connect(os.environ["POSTGRES_IMPORT_URL"]) as connection:
               with connection.cursor() as cursor:
                   cursor.execute(
@@ -105,10 +160,35 @@ jobs:
                   expected_tables = set(TABLE_ORDER)
                   if actual_tables != expected_tables:
                       raise SystemExit("Persistent import did not commit the expected schema contract.")
-                  for table in TABLE_ORDER:
+
+                  for table, expected_count in expected_counts.items():
                       cursor.execute(f'SELECT COUNT(*) FROM "{table}"')
-                      if cursor.fetchone()[0] != 0:
-                          raise SystemExit("Unexpected rows found after schema-only import.")
+                      if cursor.fetchone()[0] != expected_count:
+                          raise SystemExit("Persistent import row counts do not match the fixture contract.")
+
+                  cursor.execute(
+                      "SELECT p.name, s.title, sh.title, a.name, pv.prompt, mr.status, ae.to_status "
+                      "FROM projects p "
+                      "JOIN scenes s ON s.project_id = p.id "
+                      "JOIN shots sh ON sh.scene_id = s.id AND sh.project_id = p.id "
+                      "JOIN shot_assets sa ON sa.shot_id = sh.id "
+                      "JOIN assets a ON a.id = sa.asset_id AND a.project_id = p.id "
+                      "JOIN prompt_versions pv ON pv.shot_id = sh.id "
+                      "JOIN media_results mr ON mr.shot_id = sh.id AND mr.prompt_version_id = pv.id "
+                      "JOIN approval_events ae ON ae.shot_id = sh.id AND ae.media_result_id = mr.id"
+                  )
+                  row = cursor.fetchone()
+                  expected = (
+                      "CI Film",
+                      "Opening",
+                      "Establishing shot",
+                      "Production Office",
+                      "wide cinematic production office",
+                      "approved",
+                      "approved",
+                  )
+                  if row != expected:
+                      raise SystemExit("Persistent import did not preserve fixture values and relationships.")
           PY
       - name: Run tests
         id: tests
