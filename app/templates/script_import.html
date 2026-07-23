@@ -42,10 +42,23 @@ async function init(){
 function setProgress(title,message){
   $('status').innerHTML=`<h3>${escapeHtml(title)}</h3><p>${escapeHtml(message)}</p>`;
 }
+function partialFailureSummary(progress,error){
+  const parts=[];
+  if(progress.scenesCreated>0)parts.push(`${progress.scenesCreated} סצנות נשמרו`);
+  if(progress.shotsCreated>0)parts.push(`${progress.shotsCreated} שוטים נשמרו`);
+  const persisted=parts.length?`${parts.join(' ו־')}.`:'לא נשמרו נתונים חדשים לפני הכשל.';
+  let failedStage='פירוק התסריט';
+  if(progress.stage==='shot-map'){
+    failedStage=`יצירת מפת השוטים לסצנה ${progress.sceneIndex+1} מתוך ${progress.sceneCount}`;
+  }
+  const retryMessage=error&&error.retryable?' ניתן לנסות שוב את השלב שנכשל.':'';
+  return `<h3>הייבוא נעצר</h3><p>${escapeHtml(error.message)}</p><p><b>השלב שנכשל:</b> ${escapeHtml(failedStage)}</p><p>${escapeHtml(persisted)}${escapeHtml(retryMessage)}</p>`;
+}
 async function runImport(){
   if($('screenplay').value.trim().length<50)return alert('יש להדביק תסריט מלא.');
   if($('replace').checked&&!confirm('כל הסצנות והשוטים הקיימים בפרויקט יוחלפו. להמשיך?'))return;
   const button=$('importButton');
+  const progress={stage:'breakdown',scenesCreated:0,shotsCreated:0,sceneIndex:0,sceneCount:0};
   button.disabled=true;
   $('status').style.display='block';
   try{
@@ -61,10 +74,13 @@ async function runImport(){
         target_shots_per_minute:Number($('rate').value)
       })
     });
-    let shotsCreated=0;
     const scenes=data.imported_scenes||[];
+    progress.scenesCreated=Number(data.scenes_created||scenes.length||0);
+    progress.sceneCount=scenes.length;
     if(shouldGenerate){
+      progress.stage='shot-map';
       for(let index=0;index<scenes.length;index++){
+        progress.sceneIndex=index;
         const scene=scenes[index];
         const count=Number(scene.recommended_shot_count||6);
         setProgress('שלב 2 מתוך 2',`יוצרת מפת שוטים לסצנה ${index+1} מתוך ${scenes.length} · ${count} שוטים`);
@@ -72,13 +88,12 @@ async function runImport(){
           method:'POST',
           body:JSON.stringify({shot_count:count,replace_existing:false})
         });
-        shotsCreated+=(createdScene.shots||[]).length;
+        progress.shotsCreated+=(createdScene.shots||[]).length;
       }
     }
-    $('status').innerHTML=`<h3>הייבוא הושלם</h3><p><b>${data.scenes_created}</b> סצנות נוצרו.</p><p><b>${shotsCreated}</b> שוטים נוצרו.</p><a href="/">פתיחת AI Film OS</a>`;
+    $('status').innerHTML=`<h3>הייבוא הושלם</h3><p><b>${progress.scenesCreated}</b> סצנות נוצרו.</p><p><b>${progress.shotsCreated}</b> שוטים נוצרו.</p><a href="/">פתיחת AI Film OS</a>`;
   }catch(error){
-    const retryMessage=error&&error.retryable?' ניתן לנסות שוב את השלב שנכשל.':'';
-    $('status').innerHTML=`<h3>הייבוא נכשל</h3><p>${escapeHtml(error.message)}</p><p>הסצנות שכבר נוצרו נשמרו.${retryMessage}</p>`;
+    $('status').innerHTML=partialFailureSummary(progress,error);
   }finally{
     button.disabled=false;
   }
