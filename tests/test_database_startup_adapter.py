@@ -58,7 +58,7 @@ class DatabaseStartupAdapterTests(unittest.TestCase):
         conn.commit.assert_not_called()
         seed.assert_not_called()
 
-    def test_postgresql_startup_remains_fail_closed(self):
+    def test_postgresql_startup_remains_fail_closed_by_default(self):
         with self.assertRaisesRegex(
             RuntimeError,
             "PostgreSQL startup initialization is not enabled yet",
@@ -68,7 +68,44 @@ class DatabaseStartupAdapterTests(unittest.TestCase):
                 schema_sql="secret-schema",
                 migrate=Mock(),
                 seed=Mock(),
+                validate_postgresql=Mock(),
             )
+
+    def test_postgresql_startup_requires_validation_when_explicitly_enabled(self):
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "PostgreSQL startup validation is required before activation",
+        ):
+            build_database_startup_adapter(
+                "postgresql",
+                schema_sql="unused",
+                migrate=Mock(),
+                seed=Mock(),
+                enable_postgresql=True,
+            )
+
+    def test_postgresql_startup_runs_validation_only_when_explicitly_enabled(self):
+        conn = Mock()
+        validate = Mock()
+        migrate = Mock()
+        seed = Mock()
+
+        startup = build_database_startup_adapter(
+            "postgresql",
+            schema_sql="unused",
+            migrate=migrate,
+            seed=seed,
+            enable_postgresql=True,
+            validate_postgresql=validate,
+        )
+
+        startup.initialize(conn)
+
+        validate.assert_called_once_with(conn)
+        migrate.assert_not_called()
+        seed.assert_not_called()
+        conn.commit.assert_not_called()
+        conn.rollback.assert_not_called()
 
     def test_unknown_backend_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unsupported database backend"):
