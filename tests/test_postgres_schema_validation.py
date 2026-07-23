@@ -3,6 +3,7 @@ import unittest
 from app.database.validate_postgres_schema import (
     EXPECTED_TABLES,
     validate_postgres_schema,
+    validate_postgres_startup_connection,
 )
 
 
@@ -35,6 +36,7 @@ class FakeConnection:
         self._cursor = cursor
         self.rollback_calls = 0
         self.close_calls = 0
+        self.commit_calls = 0
 
     def cursor(self):
         return self._cursor
@@ -44,6 +46,9 @@ class FakeConnection:
 
     def close(self):
         self.close_calls += 1
+
+    def commit(self):
+        self.commit_calls += 1
 
 
 class PostgreSQLSchemaValidationTests(unittest.TestCase):
@@ -102,6 +107,30 @@ class PostgreSQLSchemaValidationTests(unittest.TestCase):
         self.assertNotIn("secret", str(error.exception))
         self.assertEqual(connection.rollback_calls, 1)
         self.assertEqual(connection.close_calls, 1)
+
+    def test_startup_validation_is_read_only_and_leaves_connection_open(self):
+        cursor = FakeCursor(tables=EXPECTED_TABLES)
+        connection = FakeConnection(cursor)
+
+        validate_postgres_startup_connection(connection)
+
+        self.assertEqual(len(cursor.executed), 1)
+        self.assertIn("information_schema.tables", cursor.executed[0])
+        self.assertEqual(connection.commit_calls, 0)
+        self.assertEqual(connection.rollback_calls, 0)
+        self.assertEqual(connection.close_calls, 0)
+
+    def test_startup_validation_fails_closed_without_exposing_provider_error(self):
+        cursor = FakeCursor(error=Exception("password=secret"))
+        connection = FakeConnection(cursor)
+
+        with self.assertRaisesRegex(RuntimeError, "startup schema validation failed") as error:
+            validate_postgres_startup_connection(connection)
+
+        self.assertNotIn("secret", str(error.exception))
+        self.assertEqual(connection.commit_calls, 0)
+        self.assertEqual(connection.rollback_calls, 0)
+        self.assertEqual(connection.close_calls, 0)
 
 
 if __name__ == "__main__":
