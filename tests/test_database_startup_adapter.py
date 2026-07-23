@@ -37,6 +37,25 @@ class DatabaseStartupAdapterTests(unittest.TestCase):
             ],
             calls,
         )
+        conn.rollback.assert_not_called()
+
+    def test_sqlite_startup_rolls_back_and_reraises_on_failure(self):
+        conn = Mock()
+        failure = RuntimeError("migration failed")
+
+        startup = build_database_startup_adapter(
+            "sqlite",
+            schema_sql="CREATE TABLE example (id INTEGER);",
+            migrate=Mock(side_effect=failure),
+            seed=Mock(),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "migration failed"):
+            startup.initialize(conn)
+
+        conn.rollback.assert_called_once_with()
+        conn.commit.assert_not_called()
+        startup.seed.assert_not_called() if hasattr(startup, "seed") else None
 
     def test_postgresql_startup_remains_fail_closed(self):
         with self.assertRaisesRegex(
