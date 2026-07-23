@@ -1,6 +1,8 @@
 import json
 from contextlib import closing
 from app.database.connection import get_connection
+from app.database.query import execute_query
+
 
 def list_shots(project_id: int | None = None):
     query = """
@@ -16,20 +18,26 @@ def list_shots(project_id: int | None = None):
         params = (project_id,)
     query += " ORDER BY s.shot_number"
     with closing(get_connection()) as conn:
-        rows = conn.execute(query, params).fetchall()
+        rows = execute_query(conn, query, params).fetchall()
     return [dict(r) for r in rows]
 
+
 def _load_assets(conn, shot_id: int):
-    rows = conn.execute("""
+    rows = execute_query(
+        conn,
+        """
         SELECT a.* FROM assets a
         JOIN shot_assets sa ON sa.asset_id=a.id
         WHERE sa.shot_id=?
         ORDER BY a.asset_type,a.name
-    """, (shot_id,)).fetchall()
+        """,
+        (shot_id,),
+    ).fetchall()
     result = []
     for row in rows:
         asset = dict(row)
-        refs = conn.execute(
+        refs = execute_query(
+            conn,
             """
             SELECT r.url
             FROM asset_reference_images r
@@ -45,44 +53,61 @@ def _load_assets(conn, shot_id: int):
         result.append(asset)
     return result
 
+
 def get_shot(shot_id: int):
     with closing(get_connection()) as conn:
-        shot = conn.execute("""
+        shot = execute_query(
+            conn,
+            """
             SELECT s.*, sc.scene_number, sc.title AS scene_title,
                    sc.story_goal, sc.emotion AS scene_emotion,
                    sc.conflict AS scene_conflict
             FROM shots s
             LEFT JOIN scenes sc ON sc.id=s.scene_id
             WHERE s.id=?
-        """, (shot_id,)).fetchone()
+            """,
+            (shot_id,),
+        ).fetchone()
         if not shot:
             return None
 
         assets = _load_assets(conn, shot_id)
 
-        previous = conn.execute("""
+        previous = execute_query(
+            conn,
+            """
             SELECT id,shot_number,title,shot_type,lighting,mood
             FROM shots
             WHERE scene_id=? AND shot_number<?
             ORDER BY shot_number DESC
             LIMIT 1
-        """, (shot["scene_id"], shot["shot_number"])).fetchone()
+            """,
+            (shot["scene_id"], shot["shot_number"]),
+        ).fetchone()
 
         previous_assets = _load_assets(conn, previous["id"]) if previous else []
 
-        versions = conn.execute("""
+        versions = execute_query(
+            conn,
+            """
             SELECT id,version,prompt,negative_prompt,source,created_at
             FROM prompt_versions
             WHERE shot_id=?
             ORDER BY version DESC
             LIMIT 10
-        """, (shot_id,)).fetchall()
+            """,
+            (shot_id,),
+        ).fetchall()
 
-        media = conn.execute("""
+        media = execute_query(
+            conn,
+            """
             SELECT * FROM media_results
             WHERE shot_id=?
             ORDER BY created_at DESC,id DESC
-        """, (shot_id,)).fetchall()
+            """,
+            (shot_id,),
+        ).fetchall()
 
     result = dict(shot)
     result["assets"] = assets
@@ -95,6 +120,7 @@ def get_shot(shot_id: int):
     if result["previous_shot"] is not None:
         result["previous_shot"]["assets"] = previous_assets
     return result
+
 
 def update_shot(shot_id: int, fields: dict):
     with closing(get_connection()) as conn:
@@ -116,6 +142,7 @@ def update_shot(shot_id: int, fields: dict):
         conn.commit()
     return get_shot(shot_id)
 
+
 def create_shot(data: dict):
     data = dict(data)
     with closing(get_connection()) as conn:
@@ -135,6 +162,7 @@ def create_shot(data: dict):
             )
         conn.commit()
     return get_shot(cur.lastrowid)
+
 
 def set_shot_assets(shot_id: int, asset_ids: list[int]):
     with closing(get_connection()) as conn:
@@ -157,6 +185,7 @@ def set_shot_assets(shot_id: int, asset_ids: list[int]):
         )
         conn.commit()
 
+
 def _save_prompt_version(
     conn, shot_id: int, prompt: str, negative_prompt: str = "", source: str = "manual"
 ):
@@ -175,6 +204,7 @@ def _save_prompt_version(
         VALUES (?,?,?,?,?)
     """, (shot_id, version, prompt, negative_prompt, source)).lastrowid
 
+
 def save_prompt_version(
     shot_id: int, prompt: str, negative_prompt: str = "", source: str = "generated"
 ):
@@ -183,12 +213,14 @@ def save_prompt_version(
         conn.commit()
     return version_id
 
+
 def list_prompt_versions(shot_id: int):
     with closing(get_connection()) as conn:
         rows = conn.execute("""
             SELECT * FROM prompt_versions WHERE shot_id=? ORDER BY version DESC
         """, (shot_id,)).fetchall()
     return [dict(row) for row in rows]
+
 
 def create_media_result(shot_id: int, data: dict):
     with closing(get_connection()) as conn:
@@ -218,6 +250,7 @@ def create_media_result(shot_id: int, data: dict):
     result = dict(row)
     result["metadata"] = json.loads(result["metadata_json"] or "{}")
     return result
+
 
 def list_media_results(shot_id: int):
     with closing(get_connection()) as conn:
