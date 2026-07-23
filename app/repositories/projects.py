@@ -1,5 +1,8 @@
 from contextlib import closing
+
 from app.database.connection import get_connection
+from app.database.query import execute_query
+
 
 def list_projects():
     with closing(get_connection()) as conn:
@@ -12,10 +15,16 @@ def list_projects():
         """).fetchall()
     return [dict(r) for r in rows]
 
+
 def get_project(project_id: int):
     with closing(get_connection()) as conn:
-        row = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        row = execute_query(
+            conn,
+            "SELECT * FROM projects WHERE id=?",
+            (project_id,),
+        ).fetchone()
     return dict(row) if row else None
+
 
 def create_project(data: dict):
     with closing(get_connection()) as conn:
@@ -29,6 +38,7 @@ def create_project(data: dict):
         conn.commit()
         row = conn.execute("SELECT * FROM projects WHERE id=?", (cur.lastrowid,)).fetchone()
     return dict(row)
+
 
 def update_project(project_id: int, fields: dict):
     with closing(get_connection()) as conn:
