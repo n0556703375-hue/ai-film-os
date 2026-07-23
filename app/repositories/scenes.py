@@ -1,5 +1,7 @@
 from contextlib import closing
+
 from app.database.connection import get_connection
+from app.database.query import execute_query
 
 
 def create_generated_shots(scene_id: int, shots: list[dict], replace_existing: bool = False):
@@ -76,20 +78,28 @@ def list_scenes(project_id: int | None = None):
         params = (project_id,)
     query += " ORDER BY scene_number"
     with closing(get_connection()) as conn:
-        rows = conn.execute(query, params).fetchall()
+        rows = execute_query(conn, query, params).fetchall()
     return [dict(r) for r in rows]
 
 
 def get_scene(scene_id: int):
     with closing(get_connection()) as conn:
-        scene = conn.execute("SELECT * FROM scenes WHERE id=?", (scene_id,)).fetchone()
+        scene = execute_query(
+            conn,
+            "SELECT * FROM scenes WHERE id=?",
+            (scene_id,),
+        ).fetchone()
         if not scene:
             return None
-        shots = conn.execute("""
+        shots = execute_query(
+            conn,
+            """
             SELECT s.*,
               (SELECT COUNT(*) FROM shot_assets sa WHERE sa.shot_id=s.id) AS asset_count
             FROM shots s WHERE s.scene_id=? ORDER BY shot_number
-        """, (scene_id,)).fetchall()
+            """,
+            (scene_id,),
+        ).fetchall()
     result = dict(scene)
     result["shots"] = [dict(s) for s in shots]
     return result
