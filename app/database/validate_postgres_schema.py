@@ -34,6 +34,28 @@ def _table_name(row: Any) -> str:
     return str(row[0])
 
 
+def validate_postgres_startup_connection(connection: Any) -> None:
+    """Verify the runtime schema contract without mutating or closing the connection."""
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = current_schema()
+                """
+            )
+            actual_tables = {_table_name(row) for row in cursor.fetchall()}
+    except Exception:
+        raise RuntimeError("PostgreSQL startup schema validation failed.") from None
+
+    if EXPECTED_TABLES - actual_tables:
+        raise RuntimeError(
+            "PostgreSQL startup schema validation failed: expected tables are missing."
+        )
+
+
 def validate_postgres_schema(
     database_url: str,
     *,
@@ -48,20 +70,7 @@ def validate_postgres_schema(
         with connection.cursor() as cursor:
             for statement in _schema_statements():
                 cursor.execute(statement)
-            cursor.execute(
-                """
-                SELECT table_name
-                FROM information_schema.tables
-                WHERE table_schema = current_schema()
-                """
-            )
-            actual_tables = {_table_name(row) for row in cursor.fetchall()}
-
-        missing_tables = sorted(EXPECTED_TABLES - actual_tables)
-        if missing_tables:
-            raise RuntimeError(
-                "PostgreSQL schema validation failed: expected tables are missing."
-            )
+        validate_postgres_startup_connection(connection)
 
         return {
             "status": "valid",
