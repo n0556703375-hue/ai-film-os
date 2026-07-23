@@ -20,10 +20,14 @@ class SQLiteStartupAdapter:
     name: str = "sqlite"
 
     def initialize(self, conn: sqlite3.Connection) -> None:
-        conn.executescript(self.schema_sql)
-        self.migrate(conn)
-        self.seed(conn)
-        conn.commit()
+        try:
+            conn.executescript(self.schema_sql)
+            self.migrate(conn)
+            self.seed(conn)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def build_database_startup_adapter(
