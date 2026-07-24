@@ -42,14 +42,30 @@ async function init(){
 function setProgress(title,message){
   $('status').innerHTML=`<h3>${escapeHtml(title)}</h3><p>${escapeHtml(message)}</p>`;
 }
-function partialFailureSummary(progress,error){
+function resolvedFailureProgress(localProgress,error){
+  const backend=error&&error.progress;
+  if(!backend)return localProgress;
+  return {
+    stage:backend.failed_stage||localProgress.stage,
+    scenesCreated:Number(backend.scenes_created??localProgress.scenesCreated??0),
+    shotsCreated:Number(backend.shots_created??localProgress.shotsCreated??0),
+    sceneIndex:localProgress.sceneIndex,
+    sceneCount:localProgress.sceneCount,
+    failedSceneNumber:backend.failed_scene_number||null,
+    completedStages:Array.isArray(backend.completed_stages)?backend.completed_stages:[]
+  };
+}
+function partialFailureSummary(localProgress,error){
+  const progress=resolvedFailureProgress(localProgress,error);
   const parts=[];
   if(progress.scenesCreated>0)parts.push(`${progress.scenesCreated} סצנות נשמרו`);
   if(progress.shotsCreated>0)parts.push(`${progress.shotsCreated} שוטים נשמרו`);
   const persisted=parts.length?`${parts.join(' ו־')}.`:'לא נשמרו נתונים חדשים לפני הכשל.';
   let failedStage='פירוק התסריט';
-  if(progress.stage==='shot-map'){
-    failedStage=`יצירת מפת השוטים לסצנה ${progress.sceneIndex+1} מתוך ${progress.sceneCount}`;
+  if(progress.stage==='shot-map'||progress.stage==='shot_maps'){
+    failedStage=progress.failedSceneNumber
+      ?`יצירת מפת השוטים לסצנה ${progress.failedSceneNumber}`
+      :`יצירת מפת השוטים לסצנה ${progress.sceneIndex+1} מתוך ${progress.sceneCount}`;
   }
   const retryMessage=error&&error.retryable?' ניתן לנסות שוב את השלב שנכשל.':'';
   return `<h3>הייבוא נעצר</h3><p>${escapeHtml(error.message)}</p><p><b>השלב שנכשל:</b> ${escapeHtml(failedStage)}</p><p>${escapeHtml(persisted)}${escapeHtml(retryMessage)}</p>`;
