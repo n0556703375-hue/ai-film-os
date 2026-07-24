@@ -51,6 +51,43 @@ class SafeApiResponseParserTests(unittest.TestCase):
         self.assertEqual(result["code"], "import_failed")
         self.assertFalse(result["retryable"])
 
+    def test_structured_import_error_preserves_allowlisted_progress(self):
+        result = self.run_case(textwrap.dedent(f"""
+            const {{ parseApiResponse }} = require({json.dumps(str(MODULE))});
+            const response = {{
+              ok: false,
+              status: 502,
+              headers: {{ get: () => 'application/json' }},
+              text: async () => JSON.stringify({{
+                detail: {{
+                  message: 'Import paused safely',
+                  code: 'import_upstream_failure',
+                  retryable: true,
+                  completed_stages: ['screenplay_breakdown', 'scene_persistence'],
+                  failed_stage: 'shot_map_generation',
+                  scenes_created: 5,
+                  shots_created: 12,
+                  failed_scene_id: 44,
+                  failed_scene_number: 3,
+                  provider_secret: 'must-not-leak'
+                }}
+              }})
+            }};
+            parseApiResponse(response).catch(error => console.log(JSON.stringify({{
+              message: error.message,
+              code: error.code,
+              retryable: error.retryable,
+              progress: error.progress
+            }})));
+        """))
+        self.assertEqual(result["message"], "Import paused safely")
+        self.assertEqual(result["code"], "import_upstream_failure")
+        self.assertTrue(result["retryable"])
+        self.assertEqual(result["progress"]["scenes_created"], 5)
+        self.assertEqual(result["progress"]["shots_created"], 12)
+        self.assertEqual(result["progress"]["failed_scene_number"], 3)
+        self.assertNotIn("provider_secret", result["progress"])
+
     def test_html_gateway_error_is_redacted_and_retryable(self):
         result = self.run_case(textwrap.dedent(f"""
             const {{ parseApiResponse }} = require({json.dumps(str(MODULE))});
