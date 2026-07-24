@@ -29,6 +29,18 @@ class ScriptImportSafeParserWiringTests(unittest.TestCase):
     def test_retry_copy_is_only_shown_for_retryable_errors(self):
         self.assertIn("error&&error.retryable", self.html)
 
+    def test_backend_progress_overrides_browser_local_counts(self):
+        self.assertIn("const backend=error&&error.progress;", self.html)
+        self.assertIn("backend.scenes_created??localProgress.scenesCreated", self.html)
+        self.assertIn("backend.shots_created??localProgress.shotsCreated", self.html)
+        self.assertIn("backend.failed_scene_number||null", self.html)
+
+    def test_partial_failure_summary_renders_persisted_progress(self):
+        self.assertIn("partialFailureSummary(progress,error)", self.html)
+        self.assertIn("סצנות נשמרו", self.html)
+        self.assertIn("שוטים נשמרו", self.html)
+        self.assertIn("השלב שנכשל", self.html)
+
 
 if __name__ == "__main__":
     unittest.main()
