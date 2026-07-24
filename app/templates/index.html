@@ -16,6 +16,7 @@
     <button class="secondary" onclick="newProject()">הפקה חדשה</button>
     <a class="button" href="/script-import">ייבוא תסריט מלא</a>
   </div>
+  <div id="projectProgressSummary" class="meta" aria-live="polite"></div>
 </header>
 <main>
   <nav>
@@ -32,7 +33,9 @@
   <section id="qa" class="panel"></section>
 </main>
 <div id="modal" class="modal"><div class="dialog"><button onclick="closeModal()">סגירה</button><div id="modalContent"></div></div></div>
+<script src="/static/project-progress.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/project-progress-ui.js"></script>
 <script src="/static/character-lock.js"></script>
 <script src="/static/shot-approval.js"></script>
 <script src="/static/job-queue-ui.js"></script>
