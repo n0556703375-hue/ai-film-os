@@ -4,7 +4,10 @@ import re
 from app.core.config import settings
 from app.services.generation import GenerationNotConfigured, _openai_client
 
-MAX_CHUNK_CHARACTERS = 12000
+# Keep each provider request comfortably below typical reverse-proxy timeouts.
+# Smaller chunks trade a few more requests for a lower risk of a long screenplay
+# breakdown returning an HTML timeout page before the API can emit structured JSON.
+MAX_CHUNK_CHARACTERS = 6000
 
 
 def _split_screenplay(screenplay: str, max_characters: int = MAX_CHUNK_CHARACTERS) -> list[str]:
