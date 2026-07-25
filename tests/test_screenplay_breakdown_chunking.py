@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from app.core.config import settings
 from app.services.screenplay_breakdown import (
+    MAX_CHUNK_CHARACTERS,
     _extract_json_array,
     _split_screenplay,
     breakdown_screenplay,
@@ -27,6 +28,16 @@ class ScreenplayBreakdownChunkingTests(unittest.TestCase):
         rebuilt = "\n\n".join(chunks)
         self.assertEqual(rebuilt, screenplay)
         self.assertTrue(all(len(chunk) <= 5000 for chunk in chunks))
+
+    def test_default_chunks_stay_below_proxy_safe_limit(self):
+        screenplay = "\n\n".join(["סצנה " + ("א" * 2200) for _ in range(6)])
+
+        chunks = _split_screenplay(screenplay)
+
+        self.assertEqual(MAX_CHUNK_CHARACTERS, 6000)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk) <= 6000 for chunk in chunks))
+        self.assertEqual("\n\n".join(chunks), screenplay)
 
     def test_json_array_can_be_extracted_from_fenced_response(self):
         result = _extract_json_array('```json\n[{"title":"א"}]\n```')
