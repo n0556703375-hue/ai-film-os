@@ -8,6 +8,9 @@ from app.services.generation import GenerationNotConfigured, _openai_client
 # Smaller chunks trade a few more requests for a lower risk of a long screenplay
 # breakdown returning an HTML timeout page before the API can emit structured JSON.
 MAX_CHUNK_CHARACTERS = 6000
+# Fail inside the application before an upstream proxy can replace the API's
+# structured JSON error with an HTML timeout page.
+PROVIDER_TIMEOUT_SECONDS = 40.0
 
 
 def _split_screenplay(screenplay: str, max_characters: int = MAX_CHUNK_CHARACTERS) -> list[str]:
@@ -93,7 +96,11 @@ Rules:
 PROJECT: {json.dumps(project, ensure_ascii=False)}
 SCREENPLAY SEGMENT:\n{chunk}
 """
-    response = _openai_client().responses.create(model=settings.openai_text_model, input=prompt)
+    response = _openai_client().responses.create(
+        model=settings.openai_text_model,
+        input=prompt,
+        timeout=PROVIDER_TIMEOUT_SECONDS,
+    )
     return _extract_json_array(response.output_text or "")
 
 
