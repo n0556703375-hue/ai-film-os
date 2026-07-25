@@ -40,10 +40,15 @@ class IdentityDriftTests(unittest.TestCase):
         self.assertEqual(0.75, result["min_similarity"])
 
     def test_rejects_invalid_scores_and_thresholds(self):
-        with self.assertRaises(ValueError):
-            assess_identity_drift(identity_similarity=1.01)
-        with self.assertRaises(ValueError):
-            assess_identity_drift(identity_similarity=0.9, min_similarity=0)
+        for invalid_score in (1.01, -0.01, float("nan"), float("inf"), float("-inf")):
+            with self.subTest(identity_similarity=invalid_score):
+                with self.assertRaises(ValueError):
+                    assess_identity_drift(identity_similarity=invalid_score)
+
+        for invalid_threshold in (0, 1.01, float("nan"), float("inf"), float("-inf")):
+            with self.subTest(min_similarity=invalid_threshold):
+                with self.assertRaises(ValueError):
+                    assess_identity_drift(identity_similarity=0.9, min_similarity=invalid_threshold)
 
 
 if __name__ == "__main__":

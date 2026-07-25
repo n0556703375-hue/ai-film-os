@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from math import isfinite
 from typing import Any
 
 
@@ -24,10 +25,10 @@ def assess_identity_drift(
     The caller supplies normalized comparison output from a vision provider or a
     human QA workflow. This function performs no external calls and stores no data.
     """
-    if not 0 <= identity_similarity <= 1:
-        raise ValueError("identity_similarity must be between 0 and 1.")
-    if not 0 < min_similarity <= 1:
-        raise ValueError("min_similarity must be greater than 0 and at most 1.")
+    if not isfinite(identity_similarity) or not 0 <= identity_similarity <= 1:
+        raise ValueError("identity_similarity must be a finite number between 0 and 1.")
+    if not isfinite(min_similarity) or not 0 < min_similarity <= 1:
+        raise ValueError("min_similarity must be a finite number greater than 0 and at most 1.")
 
     normalized_flags = sorted({str(flag).strip() for flag in (flags or []) if str(flag).strip()})
     blocking_flags = sorted(CRITICAL_FLAGS.intersection(normalized_flags))
