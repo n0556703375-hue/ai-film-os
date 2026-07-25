@@ -30,6 +30,21 @@ class IdentityDriftCompletionAuditTests(unittest.TestCase):
         self.assertEqual(completed["completed_at"], "2026-07-25T17:05:00+00:00")
         self.assertEqual(completed["status"], "passed")
 
+    def test_rejects_naive_completion_timestamp(self):
+        running = {
+            "status": "running",
+            "worker_id": "identity-worker-1",
+            "attempt": 1,
+        }
+
+        with self.assertRaisesRegex(ValueError, "timezone-aware"):
+            build_completed_identity_drift_assessment(
+                running,
+                {"status": "passed", "passed": True, "score": 0.96},
+                "identity-worker-1",
+                completed_at=datetime(2026, 7, 25, 17, 5),
+            )
+
     def test_does_not_mutate_claim_or_result(self):
         running = {
             "status": "running",

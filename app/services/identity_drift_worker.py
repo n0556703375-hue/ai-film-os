@@ -48,5 +48,7 @@ def build_completed_identity_drift_assessment(
     if claimed_at:
         completed["claimed_at"] = claimed_at
     timestamp = completed_at or datetime.now(timezone.utc)
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise ValueError("completed_at must be timezone-aware.")
     completed["completed_at"] = timestamp.astimezone(timezone.utc).isoformat()
     return completed
