@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.database.connection import get_connection
 from app.services.identity_drift import (
@@ -48,6 +48,14 @@ class IdentityDriftEvaluationRequest(BaseModel):
 
 class IdentityDriftClaimRequest(BaseModel):
     worker_id: str = Field(min_length=1, max_length=200)
+
+    @field_validator("worker_id")
+    @classmethod
+    def normalize_worker_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("worker_id must contain non-whitespace characters.")
+        return normalized
 
 
 def _store_identity_drift(shot_id: int, media_id: int, assessment: dict[str, Any]):
@@ -205,7 +213,7 @@ def claim_identity_drift(
         claimed.update({
             "status": "running",
             "passed": False,
-            "worker_id": request.worker_id.strip(),
+            "worker_id": request.worker_id,
             "claimed_at": datetime.now(timezone.utc).isoformat(),
             "attempt": int(assessment.get("attempt") or 0) + 1,
         })
