@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -26,3 +27,26 @@ def validate_identity_drift_worker_ownership(
         raise ValueError("identity drift assessment is claimed by another worker.")
 
     return normalized_worker_id
+
+
+def build_completed_identity_drift_assessment(
+    current_assessment: dict[str, Any],
+    result: dict[str, Any],
+    worker_id: str,
+    *,
+    completed_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Build a completed result while retaining claim audit metadata."""
+    normalized_worker_id = validate_identity_drift_worker_ownership(
+        current_assessment,
+        worker_id,
+    )
+    completed = dict(result)
+    completed["worker_id"] = normalized_worker_id
+    completed["attempt"] = int(current_assessment.get("attempt") or 1)
+    claimed_at = current_assessment.get("claimed_at")
+    if claimed_at:
+        completed["claimed_at"] = claimed_at
+    timestamp = completed_at or datetime.now(timezone.utc)
+    completed["completed_at"] = timestamp.astimezone(timezone.utc).isoformat()
+    return completed
