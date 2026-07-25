@@ -2,6 +2,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Response
 from app.models.schemas import AssetCreate, AssetUpdate, AssetLockRequest, ReferenceApprovalRequest
 from app.repositories import assets as repo
+from app.services.reference_gallery import group_approved_references
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 
@@ -15,6 +16,16 @@ def get_asset(asset_id: int):
     if not asset:
         raise HTTPException(404, "הנכס לא נמצא.")
     return asset
+
+@router.get("/{asset_id}/references/grouped")
+def grouped_approved_references(asset_id: int):
+    asset = repo.get_asset(asset_id)
+    if not asset:
+        raise HTTPException(404, "הנכס לא נמצא.")
+    return {
+        "asset_id": asset_id,
+        "groups": group_approved_references(asset.get("reference_images", [])),
+    }
 
 @router.get("/{asset_id}/references/{reference_id}/image")
 def reference_image(asset_id: int, reference_id: int):
