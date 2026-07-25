@@ -12,7 +12,7 @@ from app.services.identity_drift import (
     assess_identity_drift,
 )
 from app.services.identity_drift_worker import (
-    validate_identity_drift_worker_ownership,
+    build_completed_identity_drift_assessment,
 )
 
 
@@ -103,15 +103,14 @@ def _store_identity_drift(
         if not isinstance(current_assessment, dict):
             raise HTTPException(409, "בדיקת הזהות לא נאספה לעיבוד.")
         try:
-            normalized_worker_id = validate_identity_drift_worker_ownership(
+            completed_assessment = build_completed_identity_drift_assessment(
                 current_assessment,
+                assessment,
                 worker_id,
             )
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise HTTPException(409, str(exc)) from exc
 
-        completed_assessment = dict(assessment)
-        completed_assessment["worker_id"] = normalized_worker_id
         metadata["identity_drift"] = completed_assessment
         conn.execute(
             "UPDATE media_results SET metadata_json=? WHERE id=?",
