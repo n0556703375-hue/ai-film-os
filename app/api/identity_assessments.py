@@ -11,18 +11,30 @@ from app.services.identity_drift import (
     DEFAULT_MIN_IDENTITY_SIMILARITY,
     assess_identity_drift,
 )
+from app.services.identity_drift_worker import (
+    validate_identity_drift_worker_ownership,
+)
 
 
 router = APIRouter(prefix="/api/shots", tags=["identity-assessments"])
 
 
 class IdentityDriftAssessmentRequest(BaseModel):
+    worker_id: str = Field(min_length=1, max_length=200)
     status: Literal["passed", "blocked", "error"]
     passed: bool
     score: float | None = Field(default=None, ge=0.0, le=1.0)
     reasons: list[str] = Field(default_factory=list, max_length=20)
     provider: str = Field(default="", max_length=200)
     model: str = Field(default="", max_length=200)
+
+    @field_validator("worker_id")
+    @classmethod
+    def normalize_worker_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("worker_id must contain non-whitespace characters.")
+        return normalized
 
     @model_validator(mode="after")
     def validate_outcome(self):
@@ -34,6 +46,7 @@ class IdentityDriftAssessmentRequest(BaseModel):
 
 
 class IdentityDriftEvaluationRequest(BaseModel):
+    worker_id: str = Field(min_length=1, max_length=200)
     identity_similarity: float = Field(ge=0.0, le=1.0)
     flags: list[str] = Field(default_factory=list, max_length=50)
     min_similarity: float = Field(
@@ -44,6 +57,14 @@ class IdentityDriftEvaluationRequest(BaseModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
     provider: str = Field(default="", max_length=200)
     model: str = Field(default="", max_length=200)
+
+    @field_validator("worker_id")
+    @classmethod
+    def normalize_worker_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("worker_id must contain non-whitespace characters.")
+        return normalized
 
 
 class IdentityDriftClaimRequest(BaseModel):
@@ -58,7 +79,12 @@ class IdentityDriftClaimRequest(BaseModel):
         return normalized
 
 
-def _store_identity_drift(shot_id: int, media_id: int, assessment: dict[str, Any]):
+def _store_identity_drift(
+    shot_id: int,
+    media_id: int,
+    assessment: dict[str, Any],
+    worker_id: str,
+):
     with closing(get_connection()) as conn:
         media = conn.execute(
             "SELECT * FROM media_results WHERE id=? AND shot_id=?",
@@ -69,8 +95,24 @@ def _store_identity_drift(shot_id: int, media_id: int, assessment: dict[str, Any
         if media["media_type"] != "image":
             raise HTTPException(409, "בדיקת Identity Drift זמינה לתמונות בלבד.")
 
-        metadata = json.loads(media["metadata_json"] or "{}")
-        metadata["identity_drift"] = assessment
+        try:
+            metadata = json.loads(media["metadata_json"] or "{}")
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise HTTPException(409, "נתוני בדיקת הזהות אינם תקינים.") from exc
+        current_assessment = metadata.get("identity_drift")
+        if not isinstance(current_assessment, dict):
+            raise HTTPException(409, "בדיקת הזהות לא נאספה לעיבוד.")
+        try:
+            normalized_worker_id = validate_identity_drift_worker_ownership(
+                current_assessment,
+                worker_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+        completed_assessment = dict(assessment)
+        completed_assessment["worker_id"] = normalized_worker_id
+        metadata["identity_drift"] = completed_assessment
         conn.execute(
             "UPDATE media_results SET metadata_json=? WHERE id=?",
             (json.dumps(metadata, ensure_ascii=False), media_id),
@@ -241,7 +283,8 @@ def record_identity_drift(
     return _store_identity_drift(
         shot_id,
         media_id,
-        request.model_dump(exclude_none=True),
+        request.model_dump(exclude={"worker_id"}, exclude_none=True),
+        request.worker_id,
     )
 
 
@@ -259,4 +302,9 @@ def evaluate_and_record_identity_drift(
     )
     assessment["provider"] = request.provider
     assessment["model"] = request.model
-    return _store_identity_drift(shot_id, media_id, assessment)
+    return _store_identity_drift(
+        shot_id,
+        media_id,
+        assessment,
+        request.worker_id,
+    )
