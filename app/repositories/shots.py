@@ -4,7 +4,28 @@ from app.database.connection import get_connection
 from app.database.query import execute_query
 
 
-def list_shots(project_id: int | None = None):
+PIPELINE_STATUS_ALIASES = {
+    "planned": "מתוכנן",
+    "prompt_ready": "פרומפט מוכן",
+    "image_draft": "תמונת טיוטה",
+    "image_approved": "תמונה מאושרת",
+    "video_draft": "וידאו טיוטה",
+    "video_approved": "וידאו מאושר",
+    "final": "סופי",
+}
+PIPELINE_STATUSES = set(PIPELINE_STATUS_ALIASES.values())
+
+
+def normalize_pipeline_status(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = PIPELINE_STATUS_ALIASES.get(value, value)
+    if normalized not in PIPELINE_STATUSES:
+        raise ValueError("סטטוס מסלול האישור אינו תקין.")
+    return normalized
+
+
+def list_shots(project_id: int | None = None, pipeline_status: str | None = None):
     query = """
         SELECT s.*,
           (SELECT COUNT(*) FROM shot_assets sa WHERE sa.shot_id=s.id) AS asset_count,
@@ -12,13 +33,20 @@ def list_shots(project_id: int | None = None):
         FROM shots s
         LEFT JOIN scenes sc ON sc.id=s.scene_id
     """
-    params: tuple = ()
+    clauses = []
+    params: list = []
     if project_id is not None:
-        query += " WHERE s.project_id=?"
-        params = (project_id,)
+        clauses.append("s.project_id=?")
+        params.append(project_id)
+    normalized_status = normalize_pipeline_status(pipeline_status)
+    if normalized_status is not None:
+        clauses.append("s.status=?")
+        params.append(normalized_status)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
     query += " ORDER BY s.shot_number"
     with closing(get_connection()) as conn:
-        rows = execute_query(conn, query, params).fetchall()
+        rows = execute_query(conn, query, tuple(params)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -177,87 +205,86 @@ def set_shot_assets(shot_id: int, asset_ids: list[int]):
             }
         if len(valid_ids) != len(set(asset_ids)):
             raise ValueError("אחד הנכסים שנבחרו אינו קיים.")
-
         conn.execute("DELETE FROM shot_assets WHERE shot_id=?", (shot_id,))
         conn.executemany(
             "INSERT INTO shot_assets (shot_id,asset_id) VALUES (?,?)",
-            [(shot_id, asset_id) for asset_id in asset_ids]
+            [(shot_id, asset_id) for asset_id in asset_ids],
         )
         conn.commit()
 
 
-def _save_prompt_version(
-    conn, shot_id: int, prompt: str, negative_prompt: str = "", source: str = "manual"
-):
-    latest = conn.execute("""
-        SELECT prompt,negative_prompt FROM prompt_versions
-        WHERE shot_id=? ORDER BY version DESC LIMIT 1
-    """, (shot_id,)).fetchone()
-    if latest and latest["prompt"] == prompt and latest["negative_prompt"] == negative_prompt:
-        return None
-    version = conn.execute(
-        "SELECT COALESCE(MAX(version),0)+1 FROM prompt_versions WHERE shot_id=?",
+def _save_prompt_version(conn, shot_id: int, prompt: str, negative_prompt: str, source: str):
+    row = conn.execute(
+        "SELECT COALESCE(MAX(version),0)+1 AS next_version FROM prompt_versions WHERE shot_id=?",
         (shot_id,),
-    ).fetchone()[0]
-    return conn.execute("""
+    ).fetchone()
+    conn.execute(
+        """
         INSERT INTO prompt_versions (shot_id,version,prompt,negative_prompt,source)
         VALUES (?,?,?,?,?)
-    """, (shot_id, version, prompt, negative_prompt, source)).lastrowid
+        """,
+        (shot_id, row["next_version"], prompt, negative_prompt, source),
+    )
 
 
-def save_prompt_version(
-    shot_id: int, prompt: str, negative_prompt: str = "", source: str = "generated"
-):
+def save_prompt_version(shot_id: int, prompt: str, negative_prompt: str, source: str):
     with closing(get_connection()) as conn:
-        version_id = _save_prompt_version(conn, shot_id, prompt, negative_prompt, source)
+        _save_prompt_version(conn, shot_id, prompt, negative_prompt, source)
         conn.commit()
-    return version_id
 
 
 def list_prompt_versions(shot_id: int):
     with closing(get_connection()) as conn:
-        rows = conn.execute("""
-            SELECT * FROM prompt_versions WHERE shot_id=? ORDER BY version DESC
-        """, (shot_id,)).fetchall()
+        rows = execute_query(
+            conn,
+            "SELECT * FROM prompt_versions WHERE shot_id=? ORDER BY version DESC",
+            (shot_id,),
+        ).fetchall()
     return [dict(row) for row in rows]
-
-
-def create_media_result(shot_id: int, data: dict):
-    with closing(get_connection()) as conn:
-        if not conn.execute("SELECT 1 FROM shots WHERE id=?", (shot_id,)).fetchone():
-            return None
-        prompt_version_id = data.get("prompt_version_id")
-        if prompt_version_id and not conn.execute(
-            "SELECT 1 FROM prompt_versions WHERE id=? AND shot_id=?",
-            (prompt_version_id, shot_id),
-        ).fetchone():
-            raise ValueError("גרסת הפרומפט אינה שייכת לשוט.")
-        version = conn.execute("""
-            SELECT COALESCE(MAX(version),0)+1 FROM media_results
-            WHERE shot_id=? AND media_type=?
-        """, (shot_id, data["media_type"])).fetchone()[0]
-        cur = conn.execute("""
-            INSERT INTO media_results
-            (shot_id,media_type,version,url,provider,model,prompt_version_id,status,notes,metadata_json)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-        """, (
-            shot_id, data["media_type"], version, data["url"], data.get("provider", ""),
-            data.get("model", ""), prompt_version_id, data.get("status", "טיוטה"),
-            data.get("notes", ""), json.dumps(data.get("metadata", {}), ensure_ascii=False),
-        ))
-        conn.commit()
-        row = conn.execute("SELECT * FROM media_results WHERE id=?", (cur.lastrowid,)).fetchone()
-    result = dict(row)
-    result["metadata"] = json.loads(result["metadata_json"] or "{}")
-    return result
 
 
 def list_media_results(shot_id: int):
     with closing(get_connection()) as conn:
-        rows = conn.execute("""
-            SELECT * FROM media_results WHERE shot_id=?
-            ORDER BY media_type,version DESC
-        """, (shot_id,)).fetchall()
+        rows = execute_query(
+            conn,
+            "SELECT * FROM media_results WHERE shot_id=? ORDER BY created_at DESC,id DESC",
+            (shot_id,),
+        ).fetchall()
     return [
-        {**dict(row), "metadata": json.loads(row["metadata_json"] or "{}")} for row in rows
+        {**dict(row), "metadata": json.loads(row["metadata_json"] or "{}")}
+        for row in rows
     ]
+
+
+def create_media_result(shot_id: int, data: dict):
+    with closing(get_connection()) as conn:
+        shot = conn.execute("SELECT * FROM shots WHERE id=?", (shot_id,)).fetchone()
+        if not shot:
+            return None
+        row = conn.execute(
+            "SELECT COALESCE(MAX(version),0)+1 AS next_version FROM media_results WHERE shot_id=? AND media_type=?",
+            (shot_id, data["media_type"]),
+        ).fetchone()
+        metadata = data.pop("metadata", {})
+        cur = conn.execute(
+            """
+            INSERT INTO media_results
+            (shot_id,media_type,version,url,provider,model,prompt_version_id,status,notes,metadata_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                shot_id,
+                data["media_type"],
+                row["next_version"],
+                data["url"],
+                data.get("provider", ""),
+                data.get("model", ""),
+                data.get("prompt_version_id"),
+                data.get("status", "טיוטה"),
+                data.get("notes", ""),
+                json.dumps(metadata, ensure_ascii=False),
+            ),
+        )
+        conn.commit()
+        result = conn.execute("SELECT * FROM media_results WHERE id=?", (cur.lastrowid,)).fetchone()
+    return {**dict(result), "metadata": json.loads(result["metadata_json"] or "{}")}
