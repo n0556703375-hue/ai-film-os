@@ -6,6 +6,7 @@ from unittest.mock import patch
 from app.core.config import settings
 from app.services.screenplay_breakdown import (
     MAX_CHUNK_CHARACTERS,
+    PROVIDER_TIMEOUT_SECONDS,
     _extract_json_array,
     _split_screenplay,
     breakdown_screenplay,
@@ -42,6 +43,23 @@ class ScreenplayBreakdownChunkingTests(unittest.TestCase):
     def test_json_array_can_be_extracted_from_fenced_response(self):
         result = _extract_json_array('```json\n[{"title":"א"}]\n```')
         self.assertEqual(result[0]["title"], "א")
+
+    @patch("app.services.screenplay_breakdown._openai_client")
+    def test_provider_call_uses_timeout_below_proxy_limit(self, client_factory):
+        calls = []
+
+        def create(**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(output_text='[{"title":"א"}]')
+
+        client_factory.return_value = SimpleNamespace(
+            responses=SimpleNamespace(create=create)
+        )
+
+        breakdown_screenplay({"name": "בדיקה"}, "סצנה קצרה")
+
+        self.assertEqual(PROVIDER_TIMEOUT_SECONDS, 40.0)
+        self.assertEqual(calls[0]["timeout"], PROVIDER_TIMEOUT_SECONDS)
 
     @patch("app.services.screenplay_breakdown._openai_client")
     @patch("app.services.screenplay_breakdown._split_screenplay")
