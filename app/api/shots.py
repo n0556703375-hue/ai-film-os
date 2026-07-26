@@ -9,8 +9,11 @@ from app.services.director import run_director
 router = APIRouter(prefix="/api/shots", tags=["shots"])
 
 @router.get("")
-def list_shots(project_id: int | None = None):
-    return repo.list_shots(project_id)
+def list_shots(project_id: int | None = None, pipeline_status: str | None = None):
+    try:
+        return repo.list_shots(project_id, pipeline_status)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 @router.post("")
 def create_shot(shot: ShotCreate):
