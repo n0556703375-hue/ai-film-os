@@ -139,6 +139,9 @@ class MediaDecisionRequest(BaseModel):
 class ShotFinalizeRequest(BaseModel):
     notes: str = Field(default="", max_length=5000)
 
+class BatchFinalizePreviewRequest(BaseModel):
+    shot_ids: list[int] = Field(min_length=1, max_length=100)
+
 class GenerationRequest(BaseModel):
     media_type: Literal["text", "image", "video"]
     instructions: str = Field(default="", max_length=5000)
