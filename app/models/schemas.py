@@ -1,5 +1,5 @@
 from typing import Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 ShotStatus = Literal[
     "מתוכנן", "פרומפט מוכן", "תמונת טיוטה", "תמונה מאושרת",
@@ -138,6 +138,26 @@ class MediaDecisionRequest(BaseModel):
 
 class ShotFinalizeRequest(BaseModel):
     notes: str = Field(default="", max_length=5000)
+
+class BatchApprovalItem(BaseModel):
+    shot_id: int = Field(ge=1)
+    media_id: int | None = Field(default=None, ge=1)
+
+class BatchApprovalRequest(BaseModel):
+    action: Literal["approve", "reject", "finalize"]
+    items: list[BatchApprovalItem] = Field(min_length=1, max_length=100)
+    notes: str = Field(default="", max_length=5000)
+
+    @model_validator(mode="after")
+    def validate_items_for_action(self):
+        keys = [(item.shot_id, item.media_id) for item in self.items]
+        if len(keys) != len(set(keys)):
+            raise ValueError("אין לשלוח אותה פעולת שוט יותר מפעם אחת.")
+        if self.action in {"approve", "reject"} and any(item.media_id is None for item in self.items):
+            raise ValueError("פעולת אישור או דחייה דורשת media_id לכל שוט.")
+        if self.action == "finalize" and any(item.media_id is not None for item in self.items):
+            raise ValueError("פעולת סיום שוט אינה מקבלת media_id.")
+        return self
 
 class BatchFinalizePreviewRequest(BaseModel):
     shot_ids: list[int] = Field(min_length=1, max_length=100)
