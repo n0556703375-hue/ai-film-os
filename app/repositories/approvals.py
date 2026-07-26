@@ -239,3 +239,34 @@ def preview_batch_finalize(shot_ids: list[int]):
         "eligible": sum(1 for item in results if item["eligible"]),
         "items": results,
     }
+
+
+def finalize_batch(shot_ids: list[int], notes: str = ""):
+    """Finalize eligible shots independently and return explicit partial results."""
+    preview = preview_batch_finalize(shot_ids)
+    results = []
+    for item in preview["items"]:
+        shot_id = item["shot_id"]
+        if item.get("already_final"):
+            results.append({"shot_id": shot_id, "status": "already_final", "reasons": []})
+            continue
+        if not item["eligible"]:
+            results.append({"shot_id": shot_id, "status": "blocked", "reasons": item["reasons"]})
+            continue
+        try:
+            pipeline = finalize_shot(shot_id, notes)
+        except ValueError as exc:
+            results.append({"shot_id": shot_id, "status": "blocked", "reasons": [str(exc)]})
+            continue
+        if pipeline is None:
+            results.append({"shot_id": shot_id, "status": "missing", "reasons": ["השוט לא נמצא."]})
+            continue
+        results.append({"shot_id": shot_id, "status": "finalized", "reasons": []})
+    return {
+        "requested": preview["requested"],
+        "unique": preview["unique"],
+        "finalized": sum(1 for item in results if item["status"] == "finalized"),
+        "blocked": sum(1 for item in results if item["status"] in {"blocked", "missing"}),
+        "already_final": sum(1 for item in results if item["status"] == "already_final"),
+        "items": results,
+    }

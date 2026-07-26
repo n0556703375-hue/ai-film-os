@@ -142,6 +142,10 @@ class ShotFinalizeRequest(BaseModel):
 class BatchFinalizePreviewRequest(BaseModel):
     shot_ids: list[int] = Field(min_length=1, max_length=100)
 
+class BatchFinalizeRequest(BatchFinalizePreviewRequest):
+    confirmed: Literal[True]
+    notes: str = Field(default="", max_length=5000)
+
 class GenerationRequest(BaseModel):
     media_type: Literal["text", "image", "video"]
     instructions: str = Field(default="", max_length=5000)
