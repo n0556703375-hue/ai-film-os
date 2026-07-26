@@ -44,3 +44,6 @@ async function loadProductionBrain() {
       </div>
     </div>`;
 }
+
+// Register from this focused module so the large legacy app.js remains untouched.
+loaders["production-brain"] = loadProductionBrain;
