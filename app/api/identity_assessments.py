@@ -11,6 +11,9 @@ from app.services.identity_drift import (
     DEFAULT_MIN_IDENTITY_SIMILARITY,
     assess_identity_drift,
 )
+from app.services.identity_drift_observability import (
+    summarize_completed_identity_drift,
+)
 from app.services.identity_drift_worker import (
     build_completed_identity_drift_assessment,
 )
@@ -161,6 +164,42 @@ def list_pending_identity_drift(
             break
 
     return {"items": pending, "count": len(pending)}
+
+
+@router.get("/identity-drift/completed")
+def list_completed_identity_drift(
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """Return operator-safe summaries for completed image assessments."""
+    with closing(get_connection()) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, shot_id, url, metadata_json
+            FROM media_results
+            WHERE media_type='image'
+            ORDER BY id DESC
+            """
+        ).fetchall()
+
+    completed = []
+    for row in rows:
+        try:
+            metadata = json.loads(row["metadata_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        summary = summarize_completed_identity_drift(metadata.get("identity_drift"))
+        if summary is None:
+            continue
+        completed.append({
+            "media_id": row["id"],
+            "shot_id": row["shot_id"],
+            "url": row["url"],
+            "identity_drift": summary,
+        })
+        if len(completed) >= limit:
+            break
+
+    return {"items": completed, "count": len(completed)}
 
 
 @router.post("/identity-drift/requeue-stale")
