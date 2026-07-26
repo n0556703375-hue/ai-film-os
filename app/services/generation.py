@@ -5,6 +5,7 @@ from openai import OpenAI
 
 from app.core.config import settings
 from app.services.prompt_builder import build_prompt
+from app.services.shot_reference_context import build_shot_reference_context
 
 
 class GenerationNotConfigured(RuntimeError):
@@ -80,6 +81,7 @@ ADDITIONAL DIRECTION:
         raise RuntimeError("OpenAI החזיר פרומפט ריק.")
     return result
 
+
 def build_character_reference_prompt(asset: dict, view_type: str, instructions: str = "") -> str:
     views = {
         "portrait": "clean head-and-shoulders identity portrait, eye-level camera",
@@ -101,6 +103,7 @@ Return only the final English prompt."""
     if not result:
         raise RuntimeError("OpenAI החזיר פרומפט דמות ריק.")
     return result
+
 
 def submit_magnific_reference(prompt: str, reference_images: list[str] | None = None) -> dict:
     payload = {
@@ -133,8 +136,9 @@ def submit_magnific_image(
         prompt = f"{prompt}\n\nADDITIONAL DIRECTION\n{instructions}"
 
     reference_images = []
-    for asset in shot.get("assets", []):
-        urls = asset.get("reference_images") or [asset.get("reference_url", "")]
+    reference_context = build_shot_reference_context(shot)
+    for asset in reference_context.get("assets", []):
+        urls = asset.get("generation_reference_images") or []
         for candidate in urls[:1]:
             url = (candidate or "").strip()
             if url and url not in reference_images:
@@ -179,6 +183,7 @@ def get_magnific_image(task_id: str) -> dict:
         "generated": data.get("generated", []),
         "has_nsfw": data.get("has_nsfw", []),
     }
+
 
 def validate_generated_image(url: str) -> None:
     with httpx.Client(timeout=30.0, follow_redirects=True) as client:
