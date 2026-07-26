@@ -1,5 +1,6 @@
 let shotFilterState = { status: "", scene: "", query: "" };
 let selectedShotIds = new Set();
+let pendingBatchFinalizeIds = [];
 
 window.loadShots = async function loadShotsWithFilters() {
   const shots = await api("/api/shots");
@@ -30,6 +31,7 @@ window.loadShots = async function loadShotsWithFilters() {
         <button class="secondary" onclick="clearShotSelection()">ניקוי בחירה</button>
         <select id="batchShotStatus"><option value="מתוכנן">מתוכנן</option><option value="פרומפט מוכן">פרומפט מוכן</option></select>
         <button onclick="applyBatchShotStatus()" ${selectedShotIds.size ? "" : "disabled"}>עדכון ${selectedShotIds.size} שוטים</button>
+        <button class="secondary" onclick="previewBatchFinalize()" ${selectedShotIds.size ? "" : "disabled"}>בדיקת סיום מרוכז</button>
       </div>
     </div>
     <div class="grid">${filtered.length ? filtered.map(renderFilteredShotCard).join("") : `<div class="card"><b>לא נמצאו שוטים תואמים</b><p class="meta">שני את המסננים כדי להציג תוצאות נוספות.</p></div>`}</div>`;
@@ -62,6 +64,7 @@ function selectVisibleShots(ids) {
 
 function clearShotSelection() {
   selectedShotIds.clear();
+  pendingBatchFinalizeIds = [];
   loadShots().catch(showError);
 }
 
@@ -80,6 +83,50 @@ async function applyBatchShotStatus() {
   });
   selectedShotIds.clear();
   await loadShots();
+}
+
+async function previewBatchFinalize() {
+  if (!selectedShotIds.size) return alert("יש לבחור לפחות שוט אחד.");
+  pendingBatchFinalizeIds = [...selectedShotIds];
+  const preview = await api("/api/shots/batch/finalize-preview", {
+    method: "POST",
+    body: JSON.stringify({ shot_ids: pendingBatchFinalizeIds }),
+  });
+  const actionable = preview.items.filter((item) => item.eligible && !item.already_final).length;
+  const alreadyFinal = preview.items.filter((item) => item.already_final).length;
+  const blocked = preview.items.filter((item) => !item.eligible);
+  show(`<h2>בדיקת סיום מרוכז</h2>
+    <div class="grid">
+      <div class="card"><div class="meta">כשירים לסיום</div><div class="stat">${actionable}</div></div>
+      <div class="card"><div class="meta">כבר סופיים</div><div class="stat">${alreadyFinal}</div></div>
+      <div class="card"><div class="meta">חסומים</div><div class="stat">${blocked.length}</div></div>
+    </div>
+    ${blocked.length ? `<div class="workspace-section"><h3>שוטים חסומים</h3>${blocked.map((item) => `<div class="card"><b>שוט ${item.shot_id}</b><div class="meta">${item.reasons.map(esc).join(" · ")}</div></div>`).join("")}</div>` : ""}
+    <label>הערה להיסטוריית האישור</label><textarea id="batchFinalizeNotes" maxlength="5000" placeholder="אופציונלי"></textarea>
+    <button onclick="confirmBatchFinalize()" ${actionable ? "" : "disabled"}>סיום ${actionable} שוטים כשירים</button>
+    <p class="meta">רק שוטים שעברו את בדיקות התמונה, הווידאו והרציפות יסומנו כסופיים.</p>`);
+}
+
+async function confirmBatchFinalize() {
+  if (!pendingBatchFinalizeIds.length) return alert("אין בחירה פעילה לסיום.");
+  if (!confirm("לסיים את כל השוטים הכשירים? הפעולה תירשם בהיסטוריית האישורים.")) return;
+  const result = await api("/api/shots/batch/finalize", {
+    method: "POST",
+    body: JSON.stringify({
+      shot_ids: pendingBatchFinalizeIds,
+      notes: $("batchFinalizeNotes")?.value || "",
+      confirmed: true,
+    }),
+  });
+  pendingBatchFinalizeIds = [];
+  selectedShotIds.clear();
+  show(`<h2>הסיום המרוכז הושלם</h2>
+    <div class="grid">
+      <div class="card"><div class="meta">הושלמו</div><div class="stat">${result.finalized}</div></div>
+      <div class="card"><div class="meta">חסומים</div><div class="stat">${result.blocked}</div></div>
+      <div class="card"><div class="meta">כבר היו סופיים</div><div class="stat">${result.already_final}</div></div>
+    </div>
+    <button onclick="closeModal(); loadShots().catch(showError)">חזרה לשוטים</button>`);
 }
 
 function updateShotFilters() {
