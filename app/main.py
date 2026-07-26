@@ -20,6 +20,7 @@ from app.api.approvals import router as approvals_router
 from app.api.jobs import router as jobs_router
 from app.api.integrations import router as integrations_router
 from app.api.identity_assessments import router as identity_assessments_router
+from app.api.production_brain import router as production_brain_router
 from app.core.config import settings
 from app.core.version import APP_VERSION
 
@@ -39,6 +40,7 @@ app = FastAPI(
 
 app.include_router(health_router)
 app.include_router(projects_router)
+app.include_router(production_brain_router)
 app.include_router(dashboard_router)
 app.include_router(shot_batches_router)
 app.include_router(shots_router)
