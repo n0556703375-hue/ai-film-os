@@ -1,6 +1,8 @@
 import json
 import re
 
+from openai import APIConnectionError, APITimeoutError, RateLimitError
+
 from app.core.config import settings
 from app.services.generation import GenerationNotConfigured, _openai_client
 
@@ -8,9 +10,10 @@ from app.services.generation import GenerationNotConfigured, _openai_client
 # Smaller chunks trade a few more requests for a lower risk of a long screenplay
 # breakdown returning an HTML timeout page before the API can emit structured JSON.
 MAX_CHUNK_CHARACTERS = 6000
-# Fail inside the application before an upstream proxy can replace the API's
-# structured JSON error with an HTML timeout page.
-PROVIDER_TIMEOUT_SECONDS = 40.0
+# Bound the complete two-attempt provider operation below the proxy window.
+PROVIDER_TIMEOUT_SECONDS = 18.0
+MAX_PROVIDER_ATTEMPTS = 2
+TRANSIENT_PROVIDER_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError)
 
 
 def _split_screenplay(screenplay: str, max_characters: int = MAX_CHUNK_CHARACTERS) -> list[str]:
@@ -24,8 +27,6 @@ def _split_screenplay(screenplay: str, max_characters: int = MAX_CHUNK_CHARACTER
     current_length = 0
 
     for paragraph in paragraphs:
-        # Extremely long paragraphs are cut safely so one malformed block cannot
-        # force a single oversized provider request.
         pieces = [
             paragraph[index:index + max_characters]
             for index in range(0, len(paragraph), max_characters)
@@ -69,6 +70,21 @@ def _extract_json_array(raw: str) -> list[dict]:
     return parsed
 
 
+def _request_breakdown(prompt: str):
+    """Retry only transient provider errors while keeping the total call bounded."""
+    client = _openai_client()
+    for attempt in range(1, MAX_PROVIDER_ATTEMPTS + 1):
+        try:
+            return client.responses.create(
+                model=settings.openai_text_model,
+                input=prompt,
+                timeout=PROVIDER_TIMEOUT_SECONDS,
+            )
+        except TRANSIENT_PROVIDER_ERRORS:
+            if attempt == MAX_PROVIDER_ATTEMPTS:
+                raise
+
+
 def _breakdown_chunk(
     project: dict,
     chunk: str,
@@ -96,11 +112,7 @@ Rules:
 PROJECT: {json.dumps(project, ensure_ascii=False)}
 SCREENPLAY SEGMENT:\n{chunk}
 """
-    response = _openai_client().responses.create(
-        model=settings.openai_text_model,
-        input=prompt,
-        timeout=PROVIDER_TIMEOUT_SECONDS,
-    )
+    response = _request_breakdown(prompt)
     return _extract_json_array(response.output_text or "")
 
 
