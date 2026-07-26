@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from app.models.schemas import (
+    BatchApprovalRequest,
     BatchFinalizePreviewRequest,
     BatchFinalizeRequest,
     MediaDecisionRequest,
@@ -9,6 +10,15 @@ from app.models.schemas import (
 from app.repositories import approvals as repo
 
 router = APIRouter(prefix="/api/shots", tags=["approvals"])
+
+
+@router.post("/batch/approval")
+def batch_approval(request: BatchApprovalRequest):
+    return repo.batch_approval(
+        action=request.action,
+        items=[item.model_dump() for item in request.items],
+        notes=request.notes,
+    )
 
 
 @router.post("/batch/finalize-preview")
