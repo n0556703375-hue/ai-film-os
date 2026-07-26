@@ -1,9 +1,14 @@
 from fastapi import APIRouter, HTTPException
 
-from app.models.schemas import MediaDecisionRequest, ShotFinalizeRequest
+from app.models.schemas import BatchFinalizePreviewRequest, MediaDecisionRequest, ShotFinalizeRequest
 from app.repositories import approvals as repo
 
 router = APIRouter(prefix="/api/shots", tags=["approvals"])
+
+
+@router.post("/batch/finalize-preview")
+def preview_batch_finalize(request: BatchFinalizePreviewRequest):
+    return repo.preview_batch_finalize(request.shot_ids)
 
 
 @router.get("/{shot_id}/pipeline")
