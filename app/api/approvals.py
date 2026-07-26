@@ -8,13 +8,14 @@ from app.models.schemas import (
     ShotFinalizeRequest,
 )
 from app.repositories import approvals as repo
+from app.repositories import batch_approvals as batch_repo
 
 router = APIRouter(prefix="/api/shots", tags=["approvals"])
 
 
 @router.post("/batch/approval")
 def batch_approval(request: BatchApprovalRequest):
-    return repo.batch_approval(
+    return batch_repo.batch_approval(
         action=request.action,
         items=[item.model_dump() for item in request.items],
         notes=request.notes,
