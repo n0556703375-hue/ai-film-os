@@ -201,3 +201,41 @@ def get_pipeline(shot_id: int):
         "media_results": [dict(row) for row in media],
         "approval_events": [dict(row) for row in events],
     }
+
+
+def preview_batch_finalize(shot_ids: list[int]):
+    """Return finalization eligibility without changing any production records."""
+    unique_ids = list(dict.fromkeys(shot_ids))
+    results = []
+    with closing(get_connection()) as conn:
+        for shot_id in unique_ids:
+            shot = conn.execute("SELECT id,status FROM shots WHERE id=?", (shot_id,)).fetchone()
+            reasons = []
+            if not shot:
+                results.append({"shot_id": shot_id, "eligible": False, "reasons": ["השוט לא נמצא."]})
+                continue
+            if shot["status"] == "סופי":
+                results.append({"shot_id": shot_id, "eligible": True, "reasons": [], "already_final": True})
+                continue
+            approved_image = conn.execute(
+                "SELECT 1 FROM media_results WHERE shot_id=? AND media_type='image' AND status=? LIMIT 1",
+                (shot_id, APPROVED),
+            ).fetchone()
+            approved_video = conn.execute(
+                "SELECT 1 FROM media_results WHERE shot_id=? AND media_type='video' AND status=? LIMIT 1",
+                (shot_id, APPROVED),
+            ).fetchone()
+            blocking_issue = _blocking_continuity_issue(conn, shot_id)
+            if not approved_image:
+                reasons.append("חסרה תמונה מאושרת.")
+            if not approved_video:
+                reasons.append("חסר וידאו מאושר.")
+            if blocking_issue:
+                reasons.append("קיימת בעיית רציפות חוסמת.")
+            results.append({"shot_id": shot_id, "eligible": not reasons, "reasons": reasons, "already_final": False})
+    return {
+        "requested": len(shot_ids),
+        "unique": len(unique_ids),
+        "eligible": sum(1 for item in results if item["eligible"]),
+        "items": results,
+    }
