@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 from typing import Any, Literal
 
 from app.repositories import jobs as repo
+from app.services.video_result_ingestion import ingest_completed_video_job
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -69,13 +70,22 @@ def claim_job(worker_id: str = "web-worker"):
 
 @router.post("/{job_id}/complete")
 def complete_job(job_id: int, request: JobCompleteRequest):
+    existing = repo.get_job(job_id)
+    if not existing:
+        raise HTTPException(404, "המשימה לא נמצאה.")
     try:
+        media_result = (
+            ingest_completed_video_job(existing, request.result)
+            if existing["job_type"] == "video"
+            else None
+        )
         job = repo.complete_job(job_id, request.result, request.actual_cost_usd)
     except ValueError as exc:
         raise HTTPException(409, str(exc))
-    if not job:
-        raise HTTPException(404, "המשימה לא נמצאה.")
-    return job
+    response = dict(job)
+    if media_result is not None:
+        response["media_result"] = media_result
+    return response
 
 
 @router.post("/{job_id}/fail")
