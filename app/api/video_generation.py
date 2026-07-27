@@ -21,6 +21,10 @@ class VideoQueueRequest(BaseModel):
     instructions: str = Field(default="", max_length=5000)
 
 
+class ConfirmedRetryRequest(BaseModel):
+    confirmed: Literal[True]
+
+
 def _approved_image(shot_id: int) -> dict | None:
     return next(
         (
@@ -116,3 +120,17 @@ def get_video_job_status(job_id: int):
     if job.get("job_type") != "video":
         raise HTTPException(409, "המשימה אינה משימת וידאו.")
     return _normalized_video_job_status(job)
+
+
+@router.post("/jobs/{job_id}/retry")
+def retry_video_job(job_id: int, request: ConfirmedRetryRequest):
+    job = jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "משימת הווידאו לא נמצאה.")
+    if job.get("job_type") != "video":
+        raise HTTPException(409, "המשימה אינה משימת וידאו.")
+    try:
+        retried = jobs.retry_failed_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    return _normalized_video_job_status(retried)
