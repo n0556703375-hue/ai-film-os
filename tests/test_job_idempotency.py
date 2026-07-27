@@ -73,6 +73,17 @@ class JobIdempotencyTests(unittest.TestCase):
         self.assertEqual(job["status"], "completed")
         conn.commit.assert_not_called()
 
+    def test_cross_project_idempotency_collision_is_rejected_without_leaking_job(self):
+        conn = self._connection_with_existing("completed")
+        with patch("app.repositories.jobs.get_connection", return_value=conn):
+            with self.assertRaisesRegex(ValueError, "שייך לפרויקט אחר"):
+                jobs.enqueue_job(
+                    1, 7, "video", {"duration_seconds": 5}, "shot:7:video:abc"
+                )
+
+        self.assertEqual(conn.execute.call_count, 2)
+        conn.commit.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
