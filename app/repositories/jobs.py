@@ -99,6 +99,28 @@ def fail_job(job_id: int, error: str, retryable: bool = True):
     return get_job(job_id)
 
 
+def retry_failed_job(job_id: int):
+    """Requeue a failed job without resetting its bounded attempt counter."""
+    with closing(get_connection()) as conn:
+        row = conn.execute("SELECT * FROM media_jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            return None
+        if row["status"] != "failed":
+            raise ValueError("ניתן לנסות שוב רק משימה שנכשלה.")
+        if row["attempts"] >= row["max_attempts"]:
+            raise ValueError("המשימה מיצתה את מספר הניסיונות המותר.")
+        conn.execute(
+            """
+            UPDATE media_jobs
+            SET status='retrying',worker_id='',finished_at=NULL,updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (job_id,),
+        )
+        conn.commit()
+    return get_job(job_id)
+
+
 def _finish(job_id: int, status: str, result: dict | None = None, actual_cost_usd: float = 0):
     with closing(get_connection()) as conn:
         if not conn.execute("SELECT 1 FROM media_jobs WHERE id=?", (job_id,)).fetchone():
