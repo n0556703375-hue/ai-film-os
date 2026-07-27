@@ -73,9 +73,71 @@ TRACKED_FIELDS = (
     ("movement", "תנועת מצלמה"),
 )
 
+EYELINE_MARKERS = {
+    "left": ("eyeline left", "looking left", "looks left", "מבט שמאלה", "מביטה שמאלה"),
+    "right": ("eyeline right", "looking right", "looks right", "מבט ימינה", "מביטה ימינה"),
+}
+
+SCREEN_DIRECTION_MARKERS = {
+    "left": ("moves left", "moving left", "travels left", "enters from right", "יוצאת שמאלה", "נעה שמאלה", "נכנסת מימין"),
+    "right": ("moves right", "moving right", "travels right", "enters from left", "יוצאת ימינה", "נעה ימינה", "נכנסת משמאל"),
+}
+
 
 def _normalized(value: Any) -> str:
     return " ".join(str(value or "").strip().lower().split())
+
+
+def _direction_marker(values: tuple[Any, ...], markers: dict[str, tuple[str, ...]]) -> str | None:
+    text = " ".join(_normalized(value) for value in values if value)
+    if not text:
+        return None
+    matches = [direction for direction, phrases in markers.items() if any(phrase in text for phrase in phrases)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _direction_issues(source: dict, target: dict, relation: str) -> list[dict]:
+    issues: list[dict] = []
+    source_eyeline = _direction_marker(
+        (source.get("camera_angle"), source.get("composition"), source.get("action")),
+        EYELINE_MARKERS,
+    )
+    target_eyeline = _direction_marker(
+        (target.get("camera_angle"), target.get("composition"), target.get("action")),
+        EYELINE_MARKERS,
+    )
+    if source_eyeline and target_eyeline and source_eyeline != target_eyeline:
+        issues.append({
+            "severity": "medium",
+            "category": "eyeline_direction",
+            "message": f"כיוון המבט השתנה בין השוט הנוכחי לשוט {relation}; יש לוודא שרצף המבטים מכוון.",
+            "expected": source_eyeline,
+            "observed": target_eyeline,
+            "neighbor_shot_id": target["id"],
+            "neighbor_shot_number": target.get("shot_number"),
+            "relation": relation,
+        })
+
+    source_direction = _direction_marker(
+        (source.get("movement"), source.get("action"), source.get("composition")),
+        SCREEN_DIRECTION_MARKERS,
+    )
+    target_direction = _direction_marker(
+        (target.get("movement"), target.get("action"), target.get("composition")),
+        SCREEN_DIRECTION_MARKERS,
+    )
+    if source_direction and target_direction and source_direction != target_direction:
+        issues.append({
+            "severity": "medium",
+            "category": "screen_direction",
+            "message": f"כיוון התנועה על המסך התהפך בין השוט הנוכחי לשוט {relation}; יש לבדוק רציפות גאוגרפית וקו פעולה.",
+            "expected": source_direction,
+            "observed": target_direction,
+            "neighbor_shot_id": target["id"],
+            "neighbor_shot_number": target.get("shot_number"),
+            "relation": relation,
+        })
+    return issues
 
 
 def _asset_signature(shot: dict) -> dict[int, tuple[str, str]]:
@@ -109,6 +171,8 @@ def _compare_pair(source: dict, target: dict, relation: str) -> list[dict]:
                 "expected": source.get(field) or "", "observed": target.get(field) or "",
                 "neighbor_shot_id": target["id"], "neighbor_shot_number": target.get("shot_number"), "relation": relation,
             })
+
+    issues.extend(_direction_issues(source, target, relation))
 
     source_assets = _asset_signature(source)
     target_assets = _asset_signature(target)
