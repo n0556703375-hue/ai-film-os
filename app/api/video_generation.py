@@ -45,6 +45,26 @@ def _job_key(shot: dict, image: dict, request: VideoQueueRequest) -> str:
     return f"shot:{shot['id']}:video:{digest}"
 
 
+def _normalized_video_job_status(job: dict) -> dict:
+    status = job["status"]
+    terminal = status in jobs.TERMINAL_STATUSES
+    retryable = status in {"queued", "running", "retrying"}
+    attempts = int(job.get("attempts") or 0)
+    max_attempts = int(job.get("max_attempts") or 0)
+    return {
+        "job_id": job["id"],
+        "shot_id": job["shot_id"],
+        "status": status,
+        "terminal": terminal,
+        "retryable": retryable,
+        "attempts": attempts,
+        "max_attempts": max_attempts,
+        "attempts_remaining": max(max_attempts - attempts, 0),
+        "updated_at": job.get("updated_at"),
+        "finished_at": job.get("finished_at"),
+    }
+
+
 @router.post("/shots/{shot_id}/queue")
 def queue_video(shot_id: int, request: VideoQueueRequest):
     shot = shots.get_shot(shot_id)
@@ -86,3 +106,13 @@ def queue_video(shot_id: int, request: VideoQueueRequest):
         "model_selection_reason": model_profile.reason,
         "job": job,
     }
+
+
+@router.get("/jobs/{job_id}/status")
+def get_video_job_status(job_id: int):
+    job = jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "משימת הווידאו לא נמצאה.")
+    if job.get("job_type") != "video":
+        raise HTTPException(409, "המשימה אינה משימת וידאו.")
+    return _normalized_video_job_status(job)
