@@ -21,22 +21,12 @@ def enqueue_job(project_id: int, shot_id: int, job_type: str, payload: dict, ide
             "SELECT * FROM media_jobs WHERE idempotency_key=? ORDER BY id DESC LIMIT 1",
             (idempotency_key,),
         ).fetchone()
-        if existing and existing["status"] in ACTIVE_STATUSES | {"completed"}:
+        if existing:
+            # An idempotency key represents one logical submission for its full lifetime.
+            # Failed or cancelled jobs must only be requeued through an explicit,
+            # bounded retry flow; a duplicate queue request must never reset attempts.
             return _decode(existing), False
         encoded_payload = json.dumps(payload, ensure_ascii=False)
-        if existing:
-            conn.execute(
-                """
-                UPDATE media_jobs
-                SET project_id=?,shot_id=?,job_type=?,status='queued',payload_json=?,result_json='{}',
-                    max_attempts=?,attempts=0,worker_id='',last_error='',estimated_cost_usd=?,actual_cost_usd=0,
-                    started_at=NULL,finished_at=NULL,updated_at=CURRENT_TIMESTAMP
-                WHERE id=?
-                """,
-                (project_id, shot_id, job_type, encoded_payload, max_attempts, estimated_cost_usd, existing["id"]),
-            )
-            conn.commit()
-            return get_job(existing["id"]), True
         cur = conn.execute(
             """
             INSERT INTO media_jobs
