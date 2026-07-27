@@ -22,6 +22,8 @@ def enqueue_job(project_id: int, shot_id: int, job_type: str, payload: dict, ide
             (idempotency_key,),
         ).fetchone()
         if existing:
+            if existing["project_id"] != project_id:
+                raise ValueError("מפתח האידמפוטנטיות כבר שייך לפרויקט אחר.")
             # An idempotency key represents one logical submission for its full lifetime.
             # Failed or cancelled jobs must only be requeued through an explicit,
             # bounded retry flow; a duplicate queue request must never reset attempts.
