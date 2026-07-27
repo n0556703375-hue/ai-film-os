@@ -150,14 +150,22 @@ def get_shot(shot_id: int):
     return result
 
 
+def _scene_project_id(conn, scene_id: int) -> int | None:
+    row = conn.execute("SELECT project_id FROM scenes WHERE id=?", (scene_id,)).fetchone()
+    return row["project_id"] if row else None
+
+
 def update_shot(shot_id: int, fields: dict):
     with closing(get_connection()) as conn:
         previous = conn.execute("SELECT * FROM shots WHERE id=?", (shot_id,)).fetchone()
         if not previous:
             return None
         if "scene_id" in fields and fields["scene_id"] is not None:
-            if not conn.execute("SELECT 1 FROM scenes WHERE id=?", (fields["scene_id"],)).fetchone():
+            scene_project_id = _scene_project_id(conn, fields["scene_id"])
+            if scene_project_id is None:
                 raise ValueError("הסצנה שנבחרה אינה קיימת.")
+            if scene_project_id != previous["project_id"]:
+                raise ValueError("לא ניתן לשייך שוט לסצנה מפרויקט אחר.")
         sets = ", ".join(f"{k}=?" for k in fields)
         conn.execute(
             f"UPDATE shots SET {sets},updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -176,8 +184,11 @@ def create_shot(data: dict):
     with closing(get_connection()) as conn:
         if not conn.execute("SELECT 1 FROM projects WHERE id=?", (data["project_id"],)).fetchone():
             raise ValueError("הפרויקט אינו קיים.")
-        if not conn.execute("SELECT 1 FROM scenes WHERE id=?", (data["scene_id"],)).fetchone():
+        scene_project_id = _scene_project_id(conn, data["scene_id"])
+        if scene_project_id is None:
             raise ValueError("הסצנה שנבחרה אינה קיימת.")
+        if scene_project_id != data["project_id"]:
+            raise ValueError("לא ניתן ליצור שוט בסצנה מפרויקט אחר.")
         names = ",".join(data)
         placeholders = ",".join("?" for _ in data)
         cur = conn.execute(
@@ -194,15 +205,19 @@ def create_shot(data: dict):
 
 def set_shot_assets(shot_id: int, asset_ids: list[int]):
     with closing(get_connection()) as conn:
+        shot = conn.execute("SELECT project_id FROM shots WHERE id=?", (shot_id,)).fetchone()
+        if not shot:
+            raise ValueError("השוט אינו קיים.")
         valid_ids = set()
         if asset_ids:
             placeholders = ",".join("?" for _ in asset_ids)
-            valid_ids = {
-                row[0] for row in conn.execute(
-                    f"SELECT id FROM assets WHERE id IN ({placeholders})",
-                    asset_ids
-                ).fetchall()
-            }
+            rows = conn.execute(
+                f"SELECT id,project_id FROM assets WHERE id IN ({placeholders})",
+                asset_ids,
+            ).fetchall()
+            valid_ids = {row["id"] for row in rows}
+            if any(row["project_id"] != shot["project_id"] for row in rows):
+                raise ValueError("לא ניתן לשייך לשוט נכס מפרויקט אחר.")
         if len(valid_ids) != len(set(asset_ids)):
             raise ValueError("אחד הנכסים שנבחרו אינו קיים.")
         conn.execute("DELETE FROM shot_assets WHERE shot_id=?", (shot_id,))
