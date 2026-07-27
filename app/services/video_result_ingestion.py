@@ -20,8 +20,16 @@ def ingest_completed_video_job(job: dict, result: dict) -> dict:
     if job.get("job_type") != "video":
         raise ValueError("המשימה אינה משימת וידאו.")
 
+    result_url = _result_url(result)
     job_id = int(job["id"])
     shot_id = int(job["shot_id"])
+    project_id = int(job["project_id"])
+    shot = shots.get_shot(shot_id)
+    if not shot:
+        raise ValueError("השוט של משימת הווידאו אינו קיים.")
+    if int(shot["project_id"]) != project_id:
+        raise ValueError("משימת הווידאו והשוט אינם שייכים לאותו פרויקט.")
+
     for media in shots.list_media_results(shot_id):
         metadata = media.get("metadata") or {}
         if media.get("media_type") == "video" and metadata.get("generation_job_id") == job_id:
@@ -42,7 +50,7 @@ def ingest_completed_video_job(job: dict, result: dict) -> dict:
         shot_id,
         {
             "media_type": "video",
-            "url": _result_url(result),
+            "url": result_url,
             "provider": str(result.get("provider") or ""),
             "model": str(result.get("model") or payload.get("selected_model_profile") or ""),
             "prompt_version_id": payload.get("prompt_version_id"),
