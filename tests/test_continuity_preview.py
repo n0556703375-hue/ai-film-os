@@ -66,6 +66,40 @@ class ContinuityPreviewTests(unittest.TestCase):
         self.assertEqual(preview["blocking_issue_count"], 1)
         self.assertFalse(preview["can_finalize"])
 
+    def test_explicit_eyeline_flip_is_reported(self):
+        first = self._shot(1, composition="medium close-up, looking left")
+        middle = self._shot(2, composition="medium close-up, looking right")
+
+        preview = preview_shot_continuity(middle["id"])
+
+        issue = next(item for item in preview["issues"] if item["category"] == "eyeline_direction")
+        self.assertEqual(issue["neighbor_shot_id"], first["id"])
+        self.assertEqual(issue["expected"], "right")
+        self.assertEqual(issue["observed"], "left")
+        self.assertEqual(issue["severity"], "medium")
+
+    def test_explicit_screen_direction_flip_is_reported(self):
+        first = self._shot(1, movement="subject moves left")
+        middle = self._shot(2, movement="subject moves right")
+
+        preview = preview_shot_continuity(middle["id"])
+
+        issue = next(item for item in preview["issues"] if item["category"] == "screen_direction")
+        self.assertEqual(issue["neighbor_shot_id"], first["id"])
+        self.assertEqual(issue["expected"], "right")
+        self.assertEqual(issue["observed"], "left")
+        self.assertEqual(issue["severity"], "medium")
+
+    def test_unspecified_directions_do_not_create_direction_issues(self):
+        self._shot(1, composition="balanced two-shot", movement="slow dolly")
+        middle = self._shot(2, composition="balanced medium shot", movement="gentle push in")
+
+        preview = preview_shot_continuity(middle["id"])
+
+        categories = {issue["category"] for issue in preview["issues"]}
+        self.assertNotIn("eyeline_direction", categories)
+        self.assertNotIn("screen_direction", categories)
+
 
 if __name__ == "__main__":
     unittest.main()
