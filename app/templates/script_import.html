@@ -20,6 +20,7 @@
 <script src="/static/safe_api.js"></script>
 <script>
 const $=id=>document.getElementById(id);
+let retryState=null;
 function escapeHtml(value){return String(value??'').replace(/[&<>'"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));}
 async function json(url,options={}){
   let response;
@@ -51,9 +52,24 @@ function resolvedFailureProgress(localProgress,error){
     shotsCreated:Number(backend.shots_created??localProgress.shotsCreated??0),
     sceneIndex:localProgress.sceneIndex,
     sceneCount:localProgress.sceneCount,
-    failedSceneNumber:backend.failed_scene_number||null,
+    failedSceneId:backend.failed_scene_id||localProgress.failedSceneId||null,
+    failedSceneNumber:backend.failed_scene_number||localProgress.failedSceneNumber||null,
     completedStages:Array.isArray(backend.completed_stages)?backend.completed_stages:[]
   };
+}
+function canRetryFailedStage(progress,error){
+  if(!error||!error.retryable)return false;
+  if(progress.stage==='shot-map'||progress.stage==='shot_maps'||progress.stage==='shot_map_generation'){
+    return Boolean(progress.failedSceneId&&retryState&&retryState.type==='shot-map');
+  }
+  return progress.scenesCreated===0&&retryState&&retryState.type==='breakdown';
+}
+function retryButton(progress,error){
+  if(!canRetryFailedStage(progress,error))return '';
+  const label=retryState.type==='shot-map'
+    ?`ניסיון חוזר למפת השוטים של סצנה ${progress.failedSceneNumber||progress.sceneIndex+1}`
+    :'ניסיון חוזר לפירוק התסריט';
+  return `<div class="row"><button id="retryStageButton" onclick="retryFailedStage()">${escapeHtml(label)}</button></div>`;
 }
 function partialFailureSummary(localProgress,error){
   const progress=resolvedFailureProgress(localProgress,error);
@@ -62,19 +78,42 @@ function partialFailureSummary(localProgress,error){
   if(progress.shotsCreated>0)parts.push(`${progress.shotsCreated} שוטים נשמרו`);
   const persisted=parts.length?`${parts.join(' ו־')}.`:'לא נשמרו נתונים חדשים לפני הכשל.';
   let failedStage='פירוק התסריט';
-  if(progress.stage==='shot-map'||progress.stage==='shot_maps'){
+  if(progress.stage==='shot-map'||progress.stage==='shot_maps'||progress.stage==='shot_map_generation'){
     failedStage=progress.failedSceneNumber
       ?`יצירת מפת השוטים לסצנה ${progress.failedSceneNumber}`
       :`יצירת מפת השוטים לסצנה ${progress.sceneIndex+1} מתוך ${progress.sceneCount}`;
   }
-  const retryMessage=error&&error.retryable?' ניתן לנסות שוב את השלב שנכשל.':'';
-  return `<h3>הייבוא נעצר</h3><p>${escapeHtml(error.message)}</p><p><b>השלב שנכשל:</b> ${escapeHtml(failedStage)}</p><p>${escapeHtml(persisted)}${escapeHtml(retryMessage)}</p>`;
+  const retryMessage=error&&error.retryable?' ניתן לנסות שוב רק את השלב שנכשל, כאשר הדבר בטוח.':'';
+  return `<h3>הייבוא נעצר</h3><p>${escapeHtml(error.message)}</p><p><b>השלב שנכשל:</b> ${escapeHtml(failedStage)}</p><p>${escapeHtml(persisted)}${escapeHtml(retryMessage)}</p>${retryButton(progress,error)}`;
+}
+function completedSummary(progress){
+  return `<h3>הייבוא הושלם</h3><p><b>${progress.scenesCreated}</b> סצנות נוצרו.</p><p><b>${progress.shotsCreated}</b> שוטים נוצרו.</p><a href="/">פתיחת AI Film OS</a>`;
+}
+async function createShotMaps(scenes,startIndex,progress){
+  for(let index=startIndex;index<scenes.length;index++){
+    progress.stage='shot-map';
+    progress.sceneIndex=index;
+    progress.sceneCount=scenes.length;
+    const scene=scenes[index];
+    progress.failedSceneId=scene.id;
+    progress.failedSceneNumber=scene.scene_number||null;
+    const count=Number(scene.recommended_shot_count||6);
+    retryState={type:'shot-map',scenes,index,progress};
+    setProgress('שלב 2 מתוך 2',`יוצרת מפת שוטים לסצנה ${index+1} מתוך ${scenes.length} · ${count} שוטים`);
+    const createdScene=await json(`/api/scenes/${scene.id}/shot-map`,{
+      method:'POST',
+      body:JSON.stringify({shot_count:count,replace_existing:false})
+    });
+    progress.shotsCreated+=(createdScene.shots||[]).length;
+  }
+  retryState=null;
 }
 async function runImport(){
   if($('screenplay').value.trim().length<50)return alert('יש להדביק תסריט מלא.');
   if($('replace').checked&&!confirm('כל הסצנות והשוטים הקיימים בפרויקט יוחלפו. להמשיך?'))return;
   const button=$('importButton');
-  const progress={stage:'breakdown',scenesCreated:0,shotsCreated:0,sceneIndex:0,sceneCount:0};
+  const progress={stage:'breakdown',scenesCreated:0,shotsCreated:0,sceneIndex:0,sceneCount:0,failedSceneId:null,failedSceneNumber:null};
+  retryState={type:'breakdown'};
   button.disabled=true;
   $('status').style.display='block';
   try{
@@ -93,25 +132,37 @@ async function runImport(){
     const scenes=data.imported_scenes||[];
     progress.scenesCreated=Number(data.scenes_created||scenes.length||0);
     progress.sceneCount=scenes.length;
-    if(shouldGenerate){
-      progress.stage='shot-map';
-      for(let index=0;index<scenes.length;index++){
-        progress.sceneIndex=index;
-        const scene=scenes[index];
-        const count=Number(scene.recommended_shot_count||6);
-        setProgress('שלב 2 מתוך 2',`יוצרת מפת שוטים לסצנה ${index+1} מתוך ${scenes.length} · ${count} שוטים`);
-        const createdScene=await json(`/api/scenes/${scene.id}/shot-map`,{
-          method:'POST',
-          body:JSON.stringify({shot_count:count,replace_existing:false})
-        });
-        progress.shotsCreated+=(createdScene.shots||[]).length;
-      }
-    }
-    $('status').innerHTML=`<h3>הייבוא הושלם</h3><p><b>${progress.scenesCreated}</b> סצנות נוצרו.</p><p><b>${progress.shotsCreated}</b> שוטים נוצרו.</p><a href="/">פתיחת AI Film OS</a>`;
+    retryState=null;
+    if(shouldGenerate)await createShotMaps(scenes,0,progress);
+    $('status').innerHTML=completedSummary(progress);
   }catch(error){
     $('status').innerHTML=partialFailureSummary(progress,error);
   }finally{
     button.disabled=false;
+  }
+}
+async function retryFailedStage(){
+  if(!retryState)return;
+  const retryButtonElement=$('retryStageButton');
+  if(retryButtonElement)retryButtonElement.disabled=true;
+  if(retryState.type==='breakdown'){
+    retryState=null;
+    await runImport();
+    return;
+  }
+  const state=retryState;
+  const scene=state.scenes[state.index];
+  try{
+    const currentScene=await json(`/api/scenes/${scene.id}`);
+    if((currentScene.shots||[]).length){
+      retryState=null;
+      $('status').innerHTML='<h3>נדרש אימות ידני</h3><p>כבר קיימים שוטים בסצנה שנכשלה. כדי למנוע כפילויות, לא בוצע ניסיון חוזר אוטומטי.</p>';
+      return;
+    }
+    await createShotMaps(state.scenes,state.index,state.progress);
+    $('status').innerHTML=completedSummary(state.progress);
+  }catch(error){
+    $('status').innerHTML=partialFailureSummary(state.progress,error);
   }
 }
 init().catch(error=>alert(error.message));
