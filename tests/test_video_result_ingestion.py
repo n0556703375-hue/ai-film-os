@@ -11,6 +11,7 @@ class VideoResultIngestionTests(unittest.TestCase):
     def setUp(self):
         self.job = {
             "id": 17,
+            "project_id": 3,
             "shot_id": 8,
             "job_type": "video",
             "payload": {
@@ -27,7 +28,8 @@ class VideoResultIngestionTests(unittest.TestCase):
 
     @patch("app.services.video_result_ingestion.shots.create_media_result")
     @patch("app.services.video_result_ingestion.shots.list_media_results", return_value=[])
-    def test_creates_draft_video_media_with_trace_metadata(self, _list_media, create_media):
+    @patch("app.services.video_result_ingestion.shots.get_shot", return_value={"id": 8, "project_id": 3})
+    def test_creates_draft_video_media_with_trace_metadata(self, _get_shot, _list_media, create_media):
         create_media.return_value = {"id": 31, "status": "טיוטה"}
 
         result = ingest_completed_video_job(
@@ -45,7 +47,8 @@ class VideoResultIngestionTests(unittest.TestCase):
 
     @patch("app.services.video_result_ingestion.shots.create_media_result")
     @patch("app.services.video_result_ingestion.shots.list_media_results")
-    def test_repeated_callback_reuses_existing_media_result(self, list_media, create_media):
+    @patch("app.services.video_result_ingestion.shots.get_shot", return_value={"id": 8, "project_id": 3})
+    def test_repeated_callback_reuses_existing_media_result(self, _get_shot, list_media, create_media):
         existing = {
             "id": 31,
             "media_type": "video",
@@ -61,6 +64,26 @@ class VideoResultIngestionTests(unittest.TestCase):
     def test_rejects_missing_or_unsafe_result_url(self):
         with self.assertRaises(ValueError):
             ingest_completed_video_job(self.job, {"url": "file:///tmp/video.mp4"})
+
+    @patch("app.services.video_result_ingestion.shots.create_media_result")
+    @patch("app.services.video_result_ingestion.shots.list_media_results")
+    @patch("app.services.video_result_ingestion.shots.get_shot", return_value={"id": 8, "project_id": 9})
+    def test_rejects_cross_project_completion_without_writing_media(self, _get_shot, list_media, create_media):
+        with self.assertRaisesRegex(ValueError, "לאותו פרויקט"):
+            ingest_completed_video_job(self.job, {"url": "https://cdn.example.com/video.mp4"})
+
+        list_media.assert_not_called()
+        create_media.assert_not_called()
+
+    @patch("app.services.video_result_ingestion.shots.create_media_result")
+    @patch("app.services.video_result_ingestion.shots.list_media_results")
+    @patch("app.services.video_result_ingestion.shots.get_shot", return_value=None)
+    def test_rejects_completion_when_job_shot_is_missing(self, _get_shot, list_media, create_media):
+        with self.assertRaisesRegex(ValueError, "אינו קיים"):
+            ingest_completed_video_job(self.job, {"url": "https://cdn.example.com/video.mp4"})
+
+        list_media.assert_not_called()
+        create_media.assert_not_called()
 
     @patch("app.api.jobs.repo.complete_job")
     @patch("app.api.jobs.ingest_completed_video_job")
