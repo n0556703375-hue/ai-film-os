@@ -17,6 +17,7 @@ router = APIRouter(prefix="/api/import-runs", tags=["import-runs"])
 class ImportRunStepRequest(BaseModel):
     project_id: int = Field(ge=1)
     screenplay: str = Field(min_length=50, max_length=500000)
+    screenplay_fingerprint: str = Field(default="", max_length=64)
     target_shots_per_minute: float = Field(default=5.0, ge=1.0, le=12.0)
     next_chunk_index: int = Field(default=0, ge=0)
     scenes: list[dict[str, Any]] = Field(default_factory=list, max_length=1000)
@@ -55,6 +56,11 @@ def process_next_import_chunk(request: ImportRunStepRequest):
 
     if state.next_chunk_index > state.chunk_count:
         raise HTTPException(409, "מצב הייבוא אינו תואם למספר המקטעים.")
+    if state.next_chunk_index > 0:
+        if not request.screenplay_fingerprint:
+            raise HTTPException(409, "חסר מזהה תסריט להמשך הייבוא.")
+        if request.screenplay_fingerprint != state.screenplay_fingerprint:
+            raise HTTPException(409, "התסריט השתנה מאז תחילת הייבוא. לא בוצעה כתיבה.")
 
     try:
         process_next_chunk(project, state)
