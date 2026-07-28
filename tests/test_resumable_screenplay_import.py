@@ -35,7 +35,7 @@ class ResumableScreenplayImportTests(unittest.TestCase):
         self.assertEqual(state.scenes, [{"title": "א"}])
         breakdown_chunk.assert_not_called()
 
-    def test_state_round_trip_preserves_progress(self):
+    def test_state_round_trip_preserves_progress_and_fingerprint(self):
         original = ImportRunState(
             project_id=7,
             screenplay="א" * 80,
@@ -43,14 +43,23 @@ class ResumableScreenplayImportTests(unittest.TestCase):
             next_chunk_index=1,
             scenes=[{"title": "א"}],
         )
-
-        restored = restore_state(serialize_state(original))
+        payload = serialize_state(original)
+        restored = restore_state(payload)
 
         self.assertEqual(restored.project_id, 7)
         self.assertEqual(restored.screenplay, original.screenplay)
         self.assertEqual(restored.target_shots_per_minute, 4.5)
         self.assertEqual(restored.next_chunk_index, 1)
         self.assertEqual(restored.scenes, [{"title": "א"}])
+        self.assertEqual(payload["screenplay_fingerprint"], original.screenplay_fingerprint)
+
+    def test_restore_rejects_changed_screenplay_for_saved_fingerprint(self):
+        original = ImportRunState(project_id=7, screenplay="א" * 80)
+        payload = serialize_state(original)
+        payload["screenplay"] = "ב" * 80
+
+        with self.assertRaisesRegex(ValueError, "אינו תואם"):
+            restore_state(payload)
 
     def test_empty_screenplay_is_rejected_before_provider_call(self):
         with self.assertRaisesRegex(ValueError, "ריק"):
