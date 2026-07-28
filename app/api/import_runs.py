@@ -1,9 +1,10 @@
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.repositories import projects as project_repo
+from app.repositories import scenes as scene_repo
 from app.services.resumable_screenplay_import import (
     ImportRunState,
     process_next_chunk,
@@ -19,6 +20,23 @@ class ImportRunStepRequest(BaseModel):
     target_shots_per_minute: float = Field(default=5.0, ge=1.0, le=12.0)
     next_chunk_index: int = Field(default=0, ge=0)
     scenes: list[dict[str, Any]] = Field(default_factory=list, max_length=1000)
+
+
+class ImportRunPersistRequest(BaseModel):
+    project_id: int = Field(ge=1)
+    completed: Literal[True]
+    scenes: list[dict[str, Any]] = Field(min_length=1, max_length=1000)
+
+
+def _scene_signature(scene: dict[str, Any]) -> tuple[int, str]:
+    try:
+        scene_number = int(scene.get("scene_number"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("לכל סצנה נדרש מספר סצנה תקין.") from exc
+    title = str(scene.get("title") or "").strip()
+    if scene_number < 1 or not title:
+        raise ValueError("לכל סצנה נדרשים מספר וכותרת תקינים.")
+    return scene_number, title
 
 
 @router.post("/process-next")
@@ -64,3 +82,44 @@ def process_next_import_chunk(request: ImportRunStepRequest):
         }
     )
     return payload
+
+
+@router.post("/persist")
+def persist_completed_import(request: ImportRunPersistRequest):
+    if not project_repo.get_project(request.project_id):
+        raise HTTPException(404, "הפרויקט לא נמצא.")
+
+    try:
+        requested_signatures = [_scene_signature(scene) for scene in request.scenes]
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if len(requested_signatures) != len(set(requested_signatures)):
+        raise HTTPException(409, "פירוק התסריט מכיל סצנות כפולות.")
+
+    existing = scene_repo.list_scenes(request.project_id)
+    if existing:
+        existing_signatures = [_scene_signature(scene) for scene in existing]
+        if existing_signatures == requested_signatures:
+            return {
+                "project_id": request.project_id,
+                "persisted": False,
+                "idempotent_replay": True,
+                "scenes_created": 0,
+                "imported_scenes": existing,
+            }
+        raise HTTPException(
+            409,
+            "בפרויקט כבר קיימות סצנות שונות. לא בוצעה החלפה או כתיבה נוספת.",
+        )
+
+    try:
+        created = scene_repo.import_scenes(request.project_id, request.scenes, False)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {
+        "project_id": request.project_id,
+        "persisted": True,
+        "idempotent_replay": False,
+        "scenes_created": len(created),
+        "imported_scenes": created,
+    }
