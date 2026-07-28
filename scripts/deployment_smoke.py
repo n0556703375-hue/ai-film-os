@@ -90,7 +90,22 @@ def build_import_payload(config: SmokeConfig) -> dict[str, Any]:
     }
 
 
-def _run_resumable_import(config: SmokeConfig) -> dict[str, Any]:
+def _scene_ids_with_shots(snapshot: dict[str, Any]) -> set[int]:
+    scene_ids = {int(scene.get("id") or 0) for scene in snapshot.get("scenes") or []}
+    result: set[int] = set()
+    for shot in snapshot.get("shots") or []:
+        scene_id = int(shot.get("scene_id") or 0)
+        if scene_id < 1 or scene_id not in scene_ids:
+            raise SmokeFailure("Production snapshot contains a shot with an invalid scene relationship")
+        result.add(scene_id)
+    return result
+
+
+def _run_resumable_import(
+    config: SmokeConfig,
+    *,
+    existing_shot_scene_ids: set[int] | None = None,
+) -> dict[str, Any]:
     state = build_import_payload(config)
     chunk_count = 0
     for _ in range(1000):
@@ -130,11 +145,16 @@ def _run_resumable_import(config: SmokeConfig) -> dict[str, Any]:
         raise SmokeFailure("Screenplay persistence returned an invalid shape")
 
     imported_scenes = list(persisted.get("imported_scenes") or [])
+    existing_shot_scene_ids = existing_shot_scene_ids or set()
     shots_created = 0
+    shot_maps_skipped = 0
     for scene in imported_scenes:
         scene_id = int(scene.get("id") or 0)
         if scene_id < 1:
             raise SmokeFailure("Persisted screenplay scene is missing an id")
+        if scene_id in existing_shot_scene_ids:
+            shot_maps_skipped += 1
+            continue
         created = _request_json(
             config,
             f"/api/scenes/{scene_id}/shot-map",
@@ -154,6 +174,7 @@ def _run_resumable_import(config: SmokeConfig) -> dict[str, Any]:
         "scenes_created": int(persisted.get("scenes_created") or 0),
         "idempotent_replay": bool(persisted.get("idempotent_replay")),
         "shots_created": shots_created,
+        "shot_maps_skipped": shot_maps_skipped,
     }
 
 
@@ -183,6 +204,7 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
     if not isinstance(before, dict):
         raise SmokeFailure("Production snapshot response has an invalid shape")
     before_counts = _snapshot_counts(before)
+    existing_shot_scene_ids = _scene_ids_with_shots(before)
 
     result: dict[str, Any] = {
         "health": "ok",
@@ -203,7 +225,10 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
         }
 
     if config.execute_import:
-        imported = _run_resumable_import(config)
+        imported = _run_resumable_import(
+            config,
+            existing_shot_scene_ids=existing_shot_scene_ids,
+        )
         after = _request_json(config, snapshot_path)
         if not isinstance(after, dict):
             raise SmokeFailure("Post-import production snapshot has an invalid shape")
