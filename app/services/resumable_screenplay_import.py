@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,6 +26,11 @@ class ImportRunState:
     @property
     def completed(self) -> bool:
         return self.next_chunk_index >= self.chunk_count
+
+    @property
+    def screenplay_fingerprint(self) -> str:
+        """Stable digest used to prevent resuming against changed screenplay text."""
+        return hashlib.sha256(self.screenplay.encode("utf-8")).hexdigest()
 
 
 def process_next_chunk(project: dict, state: ImportRunState) -> ImportRunState:
@@ -57,6 +63,7 @@ def serialize_state(state: ImportRunState) -> dict[str, Any]:
     return {
         "project_id": state.project_id,
         "screenplay": state.screenplay,
+        "screenplay_fingerprint": state.screenplay_fingerprint,
         "target_shots_per_minute": state.target_shots_per_minute,
         "next_chunk_index": state.next_chunk_index,
         "scenes": list(state.scenes),
@@ -64,10 +71,14 @@ def serialize_state(state: ImportRunState) -> dict[str, Any]:
 
 
 def restore_state(payload: dict[str, Any]) -> ImportRunState:
-    return ImportRunState(
+    state = ImportRunState(
         project_id=int(payload["project_id"]),
         screenplay=str(payload["screenplay"]),
         target_shots_per_minute=float(payload.get("target_shots_per_minute") or 5.0),
         next_chunk_index=max(0, int(payload.get("next_chunk_index") or 0)),
         scenes=[dict(item) for item in payload.get("scenes") or []],
     )
+    expected_fingerprint = str(payload.get("screenplay_fingerprint") or "")
+    if expected_fingerprint and expected_fingerprint != state.screenplay_fingerprint:
+        raise ValueError("מצב הייבוא אינו תואם לתסריט הנוכחי.")
+    return state
