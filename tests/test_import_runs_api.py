@@ -9,6 +9,7 @@ from app.api.import_runs import (
     persist_completed_import,
     process_next_import_chunk,
 )
+from app.services.resumable_screenplay_import import ImportRunState
 
 
 class ImportRunsApiTests(unittest.TestCase):
@@ -28,6 +29,7 @@ class ImportRunsApiTests(unittest.TestCase):
         self.assertEqual(result["project_id"], 7)
         self.assertEqual(result["processed_chunks"], 1)
         self.assertEqual(result["scenes"], [{"title": "סצנה א"}])
+        self.assertEqual(len(result["screenplay_fingerprint"]), 64)
         process_next.assert_called_once()
 
     @patch("app.api.import_runs.project_repo.get_project", return_value=None)
@@ -49,6 +51,44 @@ class ImportRunsApiTests(unittest.TestCase):
                 )
             )
         self.assertEqual(raised.exception.status_code, 409)
+
+    @patch("app.api.import_runs.process_next_chunk")
+    @patch("app.api.import_runs.project_repo.get_project", return_value={"id": 7})
+    def test_resume_requires_matching_screenplay_fingerprint(self, _get_project, process_next):
+        screenplay = "א" * 7000
+        fingerprint = ImportRunState(project_id=7, screenplay=screenplay).screenplay_fingerprint
+
+        result = process_next_import_chunk(
+            ImportRunStepRequest(
+                project_id=7,
+                screenplay=screenplay,
+                screenplay_fingerprint=fingerprint,
+                next_chunk_index=1,
+                scenes=[{"title": "פתיחה"}],
+            )
+        )
+
+        self.assertEqual(result["screenplay_fingerprint"], fingerprint)
+        process_next.assert_called_once()
+
+    @patch("app.api.import_runs.process_next_chunk")
+    @patch("app.api.import_runs.project_repo.get_project", return_value={"id": 7})
+    def test_resume_rejects_changed_screenplay_before_provider_call(self, _get_project, process_next):
+        original = ImportRunState(project_id=7, screenplay="א" * 7000)
+
+        with self.assertRaises(HTTPException) as raised:
+            process_next_import_chunk(
+                ImportRunStepRequest(
+                    project_id=7,
+                    screenplay="ב" * 7000,
+                    screenplay_fingerprint=original.screenplay_fingerprint,
+                    next_chunk_index=1,
+                    scenes=[{"title": "פתיחה"}],
+                )
+            )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        process_next.assert_not_called()
 
     @patch("app.api.import_runs.process_next_chunk", side_effect=RuntimeError("provider payload"))
     @patch("app.api.import_runs.project_repo.get_project", return_value={"id": 7})
