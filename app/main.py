@@ -11,6 +11,7 @@ from app.api.shot_batches import router as shot_batches_router
 from app.api.shots import router as shots_router
 from app.api.assets import router as assets_router
 from app.api.scenes import router as scenes_router
+from app.api.import_runs import router as import_runs_router
 from app.api.scene_asset_variants import router as scene_asset_variants_router
 from app.api.dashboard import router as dashboard_router
 from app.api.issues import router as issues_router
@@ -47,6 +48,7 @@ app.include_router(shots_router)
 app.include_router(assets_router)
 app.include_router(scene_asset_variants_router)
 app.include_router(scenes_router)
+app.include_router(import_runs_router)
 app.include_router(issues_router)
 app.include_router(generation_router)
 app.include_router(video_generation_router)
