@@ -51,11 +51,13 @@ async function processBreakdown(state){
       body:JSON.stringify({
         project_id:state.projectId,
         screenplay:state.screenplay,
+        screenplay_fingerprint:state.screenplayFingerprint||'',
         target_shots_per_minute:state.rate,
         next_chunk_index:state.nextChunkIndex,
         scenes:state.scenes
       })
     });
+    state.screenplayFingerprint=String(data.screenplay_fingerprint||'');
     state.nextChunkIndex=Number(data.next_chunk_index||0);
     state.chunkCount=Number(data.chunk_count||0);
     state.scenes=Array.isArray(data.scenes)?data.scenes:[];
@@ -103,7 +105,7 @@ async function runImport(){
   const screenplay=$('screenplay').value;
   if(screenplay.trim().length<50)return alert('יש להדביק תסריט מלא.');
   const button=$('importButton');
-  const state={projectId:Number($('project').value),screenplay,rate:Number($('rate').value),nextChunkIndex:0,chunkCount:0,scenes:[],completed:false,shouldGenerate:$('generate').checked};
+  const state={projectId:Number($('project').value),screenplay,screenplayFingerprint:'',rate:Number($('rate').value),nextChunkIndex:0,chunkCount:0,scenes:[],completed:false,shouldGenerate:$('generate').checked};
   const progress={scenesCreated:0,shotsCreated:0};
   button.disabled=true;$('status').style.display='block';
   try{await continueImport(state,progress);}catch(error){$('status').innerHTML=failureSummary(error);}finally{button.disabled=false;}
