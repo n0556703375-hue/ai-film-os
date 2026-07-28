@@ -60,7 +60,6 @@ def _request_json(
             raw = response.read()
             content_type = response.headers.get("Content-Type", "")
     except HTTPError as exc:
-        # Do not echo response bodies: proxies and providers may include sensitive details.
         raise SmokeFailure(f"{method} {path} returned HTTP {exc.code}") from exc
     except URLError as exc:
         raise SmokeFailure(f"{method} {path} could not reach the deployed service") from exc
@@ -84,9 +83,77 @@ def build_import_payload(config: SmokeConfig) -> dict[str, Any]:
     return {
         "project_id": config.project_id,
         "screenplay": screenplay,
-        "replace_existing": False,
-        "generate_shot_maps": True,
+        "screenplay_fingerprint": "",
         "target_shots_per_minute": 5.0,
+        "next_chunk_index": 0,
+        "scenes": [],
+    }
+
+
+def _run_resumable_import(config: SmokeConfig) -> dict[str, Any]:
+    state = build_import_payload(config)
+    chunk_count = 0
+    for _ in range(1000):
+        response = _request_json(
+            config,
+            "/api/import-runs/process-next",
+            method="POST",
+            payload=state,
+        )
+        if not isinstance(response, dict):
+            raise SmokeFailure("Resumable screenplay breakdown returned an invalid shape")
+        state = {
+            "project_id": config.project_id,
+            "screenplay": state["screenplay"],
+            "screenplay_fingerprint": str(response.get("screenplay_fingerprint") or ""),
+            "target_shots_per_minute": 5.0,
+            "next_chunk_index": int(response.get("next_chunk_index") or 0),
+            "scenes": list(response.get("scenes") or []),
+        }
+        chunk_count = int(response.get("chunk_count") or 0)
+        if response.get("completed"):
+            break
+    else:
+        raise SmokeFailure("Resumable screenplay breakdown exceeded the safe chunk limit")
+
+    persisted = _request_json(
+        config,
+        "/api/import-runs/persist",
+        method="POST",
+        payload={
+            "project_id": config.project_id,
+            "completed": True,
+            "scenes": state["scenes"],
+        },
+    )
+    if not isinstance(persisted, dict):
+        raise SmokeFailure("Screenplay persistence returned an invalid shape")
+
+    imported_scenes = list(persisted.get("imported_scenes") or [])
+    shots_created = 0
+    for scene in imported_scenes:
+        scene_id = int(scene.get("id") or 0)
+        if scene_id < 1:
+            raise SmokeFailure("Persisted screenplay scene is missing an id")
+        created = _request_json(
+            config,
+            f"/api/scenes/{scene_id}/shot-map",
+            method="POST",
+            payload={
+                "shot_count": int(scene.get("recommended_shot_count") or 6),
+                "replace_existing": False,
+            },
+        )
+        if not isinstance(created, dict):
+            raise SmokeFailure("Shot-map generation returned an invalid shape")
+        shots_created += len(created.get("shots") or [])
+
+    return {
+        "processed_chunks": int(state["next_chunk_index"]),
+        "chunk_count": chunk_count,
+        "scenes_created": int(persisted.get("scenes_created") or 0),
+        "idempotent_replay": bool(persisted.get("idempotent_replay")),
+        "shots_created": shots_created,
     }
 
 
@@ -136,29 +203,14 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
         }
 
     if config.execute_import:
-        imported = _request_json(
-            config,
-            "/api/scenes/import-script",
-            method="POST",
-            payload=build_import_payload(config),
-        )
-        if not isinstance(imported, dict):
-            raise SmokeFailure("Screenplay import response has an invalid shape")
+        imported = _run_resumable_import(config)
         after = _request_json(config, snapshot_path)
         if not isinstance(after, dict):
             raise SmokeFailure("Post-import production snapshot has an invalid shape")
         after_counts = _snapshot_counts(after)
         if after_counts["scenes"] < before_counts["scenes"] or after_counts["shots"] < before_counts["shots"]:
             raise SmokeFailure("Production counts decreased after non-replacing import")
-        result.update(
-            {
-                "import_executed": True,
-                "completed_stages": list(imported.get("completed_stages") or []),
-                "scenes_created": int(imported.get("scenes_created") or 0),
-                "shots_created": int(imported.get("shots_created") or 0),
-                "after": after_counts,
-            }
-        )
+        result.update({"import_executed": True, **imported, "after": after_counts})
 
     return result
 
