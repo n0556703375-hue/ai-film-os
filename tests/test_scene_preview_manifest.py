@@ -96,6 +96,48 @@ class ScenePreviewManifestTests(unittest.TestCase):
 
         self.assertTrue(manifest["timeline"][0]["video_url"].endswith("-v2.mp4"))
 
+    def test_manifest_excludes_approved_media_from_another_project(self):
+        self._approve_video(self.shot_one["id"])
+        self._approve_video(self.shot_two["id"])
+
+        other_project = projects.create_project({
+            "name": "Other Assembly Test",
+            "description": "",
+            "visual_style": "",
+            "rules": "",
+        })
+        other_scene = scenes.create_scene({
+            "project_id": other_project["id"],
+            "scene_number": self.scene["scene_number"],
+            "title": "Other Assembly Scene",
+            "status": "מתוכנן",
+            "story_goal": "",
+            "emotion": "",
+            "conflict": "",
+            "beginning": "",
+            "ending": "",
+            "notes": "",
+        })
+        foreign_shot = shots.create_shot({
+            "project_id": other_project["id"],
+            "scene_id": other_scene["id"],
+            "shot_number": 1,
+            "title": "Foreign First",
+            "status": "וידאו מאושר",
+            "duration_seconds": 99,
+        })
+        foreign_video = self._approve_video(foreign_shot["id"], 7)
+
+        manifest = get_scene_preview_manifest(self.scene["id"])
+
+        timeline_ids = {item["shot_id"] for item in manifest["timeline"]}
+        timeline_urls = {item["video_url"] for item in manifest["timeline"]}
+        self.assertEqual(timeline_ids, {self.shot_one["id"], self.shot_two["id"]})
+        self.assertNotIn(foreign_shot["id"], timeline_ids)
+        self.assertNotIn(foreign_video["url"], timeline_urls)
+        self.assertEqual(manifest["duration_seconds"], 6.5)
+        self.assertTrue(manifest["ready_for_preview"])
+
 
 if __name__ == "__main__":
     unittest.main()
