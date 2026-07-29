@@ -16,7 +16,7 @@ A production operating system that turns a complete screenplay into approved, co
 - **DONE** Project, scene, shot, asset, issue and media-job records are project-aware.
 - **DONE** Project switching and project-scoped list filters.
 - **DONE** Cross-project shot/scene and shot/asset relationship guards.
-- **NEXT** Automated two-project end-to-end isolation test.
+- **DONE** Automated two-project end-to-end isolation test (PR #160).
 - **NEXT** Audit remaining write endpoints for common-project ownership checks.
 - **NEXT** Confirm that generation, approvals, continuity and scene assembly never mix project data.
 - **BLOCKED** Multi-user or multi-client access requires authentication, authorization and workspace ownership decisions.
