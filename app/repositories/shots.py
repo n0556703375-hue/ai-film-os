@@ -160,12 +160,34 @@ def update_shot(shot_id: int, fields: dict):
         previous = conn.execute("SELECT * FROM shots WHERE id=?", (shot_id,)).fetchone()
         if not previous:
             return None
-        if "scene_id" in fields and fields["scene_id"] is not None:
-            scene_project_id = _scene_project_id(conn, fields["scene_id"])
+
+        target_project_id = fields.get("project_id", previous["project_id"])
+        if not conn.execute(
+            "SELECT 1 FROM projects WHERE id=?", (target_project_id,)
+        ).fetchone():
+            raise ValueError("הפרויקט אינו קיים.")
+
+        target_scene_id = fields.get("scene_id", previous["scene_id"])
+        if target_scene_id is not None:
+            scene_project_id = _scene_project_id(conn, target_scene_id)
             if scene_project_id is None:
                 raise ValueError("הסצנה שנבחרה אינה קיימת.")
-            if scene_project_id != previous["project_id"]:
+            if scene_project_id != target_project_id:
                 raise ValueError("לא ניתן לשייך שוט לסצנה מפרויקט אחר.")
+
+        linked_asset = conn.execute(
+            """
+            SELECT 1
+            FROM shot_assets sa
+            JOIN assets a ON a.id=sa.asset_id
+            WHERE sa.shot_id=? AND a.project_id<>?
+            LIMIT 1
+            """,
+            (shot_id, target_project_id),
+        ).fetchone()
+        if linked_asset:
+            raise ValueError("לא ניתן להעביר שוט לפרויקט אחר כל עוד מקושרים אליו נכסים מהפרויקט הנוכחי.")
+
         sets = ", ".join(f"{k}=?" for k in fields)
         conn.execute(
             f"UPDATE shots SET {sets},updated_at=CURRENT_TIMESTAMP WHERE id=?",
