@@ -79,9 +79,14 @@ def resolve_issue(issue_id: int, resolved: bool):
     return cur.rowcount > 0
 
 
-def clear_resolved():
+def clear_resolved(project_id: int):
     with closing(get_connection()) as conn:
-        cur = conn.execute("DELETE FROM continuity_issues WHERE resolved=1")
+        if not conn.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+            raise ValueError("הפרויקט שנבחר אינו קיים.")
+        cur = conn.execute(
+            "DELETE FROM continuity_issues WHERE resolved=1 AND project_id=?",
+            (project_id,),
+        )
         conn.commit()
     return cur.rowcount
 
