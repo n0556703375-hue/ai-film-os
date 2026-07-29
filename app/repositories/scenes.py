@@ -107,8 +107,20 @@ def get_scene(scene_id: int):
 
 def update_scene(scene_id: int, fields: dict):
     with closing(get_connection()) as conn:
-        if not conn.execute("SELECT 1 FROM scenes WHERE id=?", (scene_id,)).fetchone():
+        current = conn.execute("SELECT * FROM scenes WHERE id=?", (scene_id,)).fetchone()
+        if not current:
             return None
+
+        project_id = fields.get("project_id", current["project_id"])
+        if project_id != current["project_id"]:
+            if not conn.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+                raise ValueError("הפרויקט אינו קיים.")
+            if conn.execute(
+                "SELECT 1 FROM shots WHERE scene_id=? AND project_id<>? LIMIT 1",
+                (scene_id, project_id),
+            ).fetchone():
+                raise ValueError("לא ניתן להעביר סצנה עם שוטים לפרויקט אחר.")
+
         sets = ", ".join(f"{k}=?" for k in fields)
         conn.execute(
             f"UPDATE scenes SET {sets},updated_at=CURRENT_TIMESTAMP WHERE id=?",
