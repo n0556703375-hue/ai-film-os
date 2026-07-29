@@ -43,5 +43,9 @@ def resolve_issue(issue_id: int, resolved: bool = True):
 
 
 @router.delete("/resolved")
-def clear_resolved():
-    return {"deleted": repo.clear_resolved()}
+def clear_resolved(project_id: int):
+    try:
+        deleted = repo.clear_resolved(project_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"deleted": deleted, "project_id": project_id}
