@@ -100,6 +100,31 @@ class ContinuityPreviewTests(unittest.TestCase):
         self.assertNotIn("eyeline_direction", categories)
         self.assertNotIn("screen_direction", categories)
 
+    def test_preview_never_uses_neighbors_from_another_project(self):
+        first = self._shot(1)
+        middle = self._shot(2)
+        third = self._shot(3)
+
+        other_project = projects.create_project({
+            "name": "Other production", "description": "", "visual_style": "", "rules": "",
+        })
+        other_scene = scenes.create_scene({
+            "project_id": other_project["id"], "scene_number": 1, "title": "Other scene", "status": "מתוכנן",
+            "story_goal": "", "emotion": "", "conflict": "", "beginning": "", "ending": "", "notes": "",
+        })
+        foreign_shot = shots.create_shot({
+            "project_id": other_project["id"], "scene_id": other_scene["id"], "shot_number": 2,
+            "title": "Foreign shot", "status": "מתוכנן", "lighting": "red emergency light",
+            "movement": "subject moves left", "shot_type": "Medium",
+        })
+
+        preview = preview_shot_continuity(middle["id"])
+
+        self.assertEqual(preview["previous_shot_id"], first["id"])
+        self.assertEqual(preview["next_shot_id"], third["id"])
+        neighbor_ids = {issue.get("neighbor_shot_id") for issue in preview["issues"]}
+        self.assertNotIn(foreign_shot["id"], neighbor_ids)
+
 
 if __name__ == "__main__":
     unittest.main()
