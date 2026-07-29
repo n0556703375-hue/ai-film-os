@@ -75,6 +75,65 @@ class ShotApprovalPipelineTests(unittest.TestCase):
         image = next(item for item in pipeline["media_results"] if item["id"] == self.image["id"])
         self.assertEqual(image["status"], "נדחה")
 
+    def test_approval_history_and_media_decisions_are_isolated_between_projects(self):
+        other_project = projects.create_project({
+            "name": "Other Approval Test",
+            "description": "",
+            "visual_style": "",
+            "rules": "",
+        })
+        other_scene = scenes.create_scene({
+            "project_id": other_project["id"],
+            "scene_number": 1,
+            "title": "Other Scene",
+            "status": "מתוכנן",
+            "story_goal": "",
+            "emotion": "",
+            "conflict": "",
+            "beginning": "",
+            "ending": "",
+            "notes": "",
+        })
+        other_shot = shots.create_shot({
+            "project_id": other_project["id"],
+            "scene_id": other_scene["id"],
+            "shot_number": 1,
+            "title": "Other Shot",
+            "status": "פרומפט מוכן",
+        })
+        other_image = shots.create_media_result(other_shot["id"], {
+            "media_type": "image",
+            "url": "https://example.com/other-image.jpg",
+            "status": "טיוטה",
+        })
+
+        with self.assertRaisesRegex(ValueError, "אינה שייכת לשוט"):
+            approvals.decide_media(self.shot["id"], other_image["id"], "approve")
+
+        first_pipeline = approvals.decide_media(
+            self.shot["id"], self.image["id"], "approve", "first project",
+        )
+        other_pipeline = approvals.decide_media(
+            other_shot["id"], other_image["id"], "approve", "other project",
+        )
+
+        self.assertEqual(
+            {item["id"] for item in first_pipeline["media_results"]},
+            {self.image["id"], self.video["id"]},
+        )
+        self.assertEqual(
+            {item["id"] for item in other_pipeline["media_results"]},
+            {other_image["id"]},
+        )
+        self.assertEqual(
+            {event["media_result_id"] for event in first_pipeline["approval_events"]},
+            {self.image["id"]},
+        )
+        self.assertEqual(
+            {event["media_result_id"] for event in other_pipeline["approval_events"]},
+            {other_image["id"]},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
