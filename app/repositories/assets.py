@@ -170,6 +170,21 @@ def update_asset(asset_id: int, fields: dict):
         current = conn.execute("SELECT * FROM assets WHERE id=?", (asset_id,)).fetchone()
         if not current:
             return None
+        project_id = fields.get("project_id", current["project_id"])
+        if project_id != current["project_id"]:
+            if not conn.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+                raise ValueError("הפרויקט אינו קיים.")
+            if conn.execute(
+                """
+                SELECT 1
+                FROM shot_assets sa
+                JOIN shots s ON s.id=sa.shot_id
+                WHERE sa.asset_id=? AND s.project_id<>?
+                LIMIT 1
+                """,
+                (asset_id, project_id),
+            ).fetchone():
+                raise ValueError("לא ניתן להעביר נכס שמקושר לשוטים לפרויקט אחר.")
         if current["lock_status"] == "locked":
             protected = {"asset_type", "reference_url", "master_prompt", "visual_rules", "negative_prompt"}
             if protected.intersection(fields):
