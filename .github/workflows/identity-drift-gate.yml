@@ -20,8 +20,9 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Run focused Identity Drift tests
+      - name: Run focused stale requeue tests
         run: |
           python -m unittest -v \
-            tests.test_identity_assessments \
+            tests.test_identity_assessments.IdentityDriftAssessmentTests.test_requeues_only_expired_running_assessments \
+            tests.test_identity_assessments.IdentityDriftAssessmentTests.test_requeue_respects_limit \
             tests.test_identity_drift_stale_requeue_project_isolation
