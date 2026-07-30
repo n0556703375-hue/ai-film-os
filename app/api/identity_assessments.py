@@ -228,6 +228,7 @@ def list_completed_identity_drift(
 
 @router.post("/identity-drift/requeue-stale")
 def requeue_stale_identity_drift(
+    project_id: int = Query(ge=1),
     max_age_minutes: int = Query(default=30, ge=1, le=1440),
     limit: int = Query(default=50, ge=1, le=200),
 ):
@@ -237,13 +238,24 @@ def requeue_stale_identity_drift(
 
     with closing(get_connection()) as conn:
         conn.execute("BEGIN IMMEDIATE")
+        project = conn.execute(
+            "SELECT id FROM projects WHERE id=?",
+            (project_id,),
+        ).fetchone()
+        if not project:
+            raise HTTPException(404, "הפרויקט לא נמצא.")
+
         rows = conn.execute(
             """
-            SELECT id, shot_id, metadata_json
+            SELECT media_results.id, media_results.shot_id,
+                   media_results.metadata_json
             FROM media_results
-            WHERE media_type='image'
-            ORDER BY id ASC
-            """
+            JOIN shots ON shots.id = media_results.shot_id
+            WHERE media_results.media_type='image'
+              AND shots.project_id=?
+            ORDER BY media_results.id ASC
+            """,
+            (project_id,),
         ).fetchall()
 
         for row in rows:
