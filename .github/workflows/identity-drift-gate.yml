@@ -1,0 +1,27 @@
+name: Identity Drift Gate
+
+on:
+  pull_request:
+    paths:
+      - "app/api/identity_assessments.py"
+      - "tests/test_identity_assessments.py"
+      - "tests/test_identity_drift_stale_requeue_project_isolation.py"
+      - ".github/workflows/identity-drift-gate.yml"
+  workflow_dispatch:
+
+jobs:
+  identity-drift-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run focused stale requeue tests
+        run: |
+          python -m unittest -v \
+            tests.test_identity_assessments.IdentityDriftAssessmentTests.test_requeue_respects_limit \
+            tests.test_identity_drift_stale_requeue_project_isolation

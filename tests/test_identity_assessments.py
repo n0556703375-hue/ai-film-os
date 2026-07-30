@@ -29,14 +29,14 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
         self.original_db = settings.database_path
         settings.database_path = Path(self.tempdir.name) / "test.db"
         init_db()
-        project = projects.create_project({
+        self.project = projects.create_project({
             "name": "Identity Assessment Test",
             "description": "",
             "visual_style": "",
             "rules": "",
         })
         scene = scenes.create_scene({
-            "project_id": project["id"],
+            "project_id": self.project["id"],
             "scene_number": 1,
             "title": "Scene",
             "status": "מתוכנן",
@@ -48,7 +48,7 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
             "notes": "",
         })
         self.shot = shots.create_shot({
-            "project_id": project["id"],
+            "project_id": self.project["id"],
             "scene_id": scene["id"],
             "shot_number": 1,
             "title": "Shot",
@@ -176,7 +176,11 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
             },
         })
 
-        result = requeue_stale_identity_drift(max_age_minutes=30, limit=50)
+        result = requeue_stale_identity_drift(
+            project_id=self.project["id"],
+            max_age_minutes=30,
+            limit=50,
+        )
 
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["items"][0]["media_id"], self.media["id"])
@@ -216,7 +220,11 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
             },
         })
 
-        result = requeue_stale_identity_drift(max_age_minutes=30, limit=1)
+        result = requeue_stale_identity_drift(
+            project_id=self.project["id"],
+            max_age_minutes=30,
+            limit=1,
+        )
 
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["items"][0]["media_id"], self.media["id"])
