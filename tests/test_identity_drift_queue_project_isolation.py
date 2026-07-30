@@ -2,6 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from fastapi import HTTPException
+
 from app.api.identity_assessments import list_pending_identity_drift
 from app.core.config import settings
 from app.database.connection import init_db
@@ -70,6 +72,12 @@ class IdentityDriftQueueProjectIsolationTests(unittest.TestCase):
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["items"][0]["media_id"], self.first["media"]["id"])
         self.assertNotEqual(result["items"][0]["media_id"], self.second["media"]["id"])
+
+    def test_pending_queue_rejects_unknown_project(self):
+        with self.assertRaises(HTTPException) as raised:
+            list_pending_identity_drift(project_id=999999, limit=50)
+
+        self.assertEqual(raised.exception.status_code, 404)
 
 
 if __name__ == "__main__":
