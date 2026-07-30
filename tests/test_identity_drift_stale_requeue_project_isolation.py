@@ -1,5 +1,7 @@
+import json
 import tempfile
 import unittest
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -7,7 +9,7 @@ from fastapi import HTTPException
 
 from app.api.identity_assessments import requeue_stale_identity_drift
 from app.core.config import settings
-from app.database.connection import init_db
+from app.database.connection import get_connection, init_db
 from app.repositories import projects, scenes, shots
 
 
@@ -67,6 +69,16 @@ class IdentityDriftStaleRequeueProjectIsolationTests(unittest.TestCase):
         })
         return {"project": project, "scene": scene, "shot": shot, "media": media}
 
+    def _identity_drift_status(self, media_id: int) -> str:
+        with closing(get_connection()) as conn:
+            row = conn.execute(
+                "SELECT metadata_json FROM media_results WHERE id=?",
+                (media_id,),
+            ).fetchone()
+        self.assertIsNotNone(row)
+        metadata = json.loads(row["metadata_json"] or "{}")
+        return metadata["identity_drift"]["status"]
+
     def test_requeue_requires_project_scope_and_does_not_mutate_other_productions(self):
         result = requeue_stale_identity_drift(
             project_id=self.first["project"]["id"],
@@ -77,9 +89,10 @@ class IdentityDriftStaleRequeueProjectIsolationTests(unittest.TestCase):
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["items"][0]["media_id"], self.first["media"]["id"])
         self.assertNotEqual(result["items"][0]["media_id"], self.second["media"]["id"])
-
-        second_media = shots.get_media_result(self.second["shot"]["id"], self.second["media"]["id"])
-        self.assertEqual(second_media["metadata"]["identity_drift"]["status"], "running")
+        self.assertEqual(
+            self._identity_drift_status(self.second["media"]["id"]),
+            "running",
+        )
 
     def test_requeue_rejects_unknown_project_without_mutation(self):
         with self.assertRaises(HTTPException) as raised:
@@ -90,10 +103,14 @@ class IdentityDriftStaleRequeueProjectIsolationTests(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.status_code, 404)
-        first_media = shots.get_media_result(self.first["shot"]["id"], self.first["media"]["id"])
-        second_media = shots.get_media_result(self.second["shot"]["id"], self.second["media"]["id"])
-        self.assertEqual(first_media["metadata"]["identity_drift"]["status"], "running")
-        self.assertEqual(second_media["metadata"]["identity_drift"]["status"], "running")
+        self.assertEqual(
+            self._identity_drift_status(self.first["media"]["id"]),
+            "running",
+        )
+        self.assertEqual(
+            self._identity_drift_status(self.second["media"]["id"]),
+            "running",
+        )
 
 
 if __name__ == "__main__":
