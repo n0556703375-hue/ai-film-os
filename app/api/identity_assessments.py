@@ -180,17 +180,29 @@ def list_pending_identity_drift(
 
 @router.get("/identity-drift/completed")
 def list_completed_identity_drift(
+    project_id: int = Query(ge=1),
     limit: int = Query(default=50, ge=1, le=200),
 ):
-    """Return operator-safe summaries for completed image assessments."""
+    """Return operator-safe summaries for one project's completed image assessments."""
     with closing(get_connection()) as conn:
+        project = conn.execute(
+            "SELECT id FROM projects WHERE id=?",
+            (project_id,),
+        ).fetchone()
+        if not project:
+            raise HTTPException(404, "הפרויקט לא נמצא.")
+
         rows = conn.execute(
             """
-            SELECT id, shot_id, url, metadata_json
+            SELECT media_results.id, media_results.shot_id,
+                   media_results.url, media_results.metadata_json
             FROM media_results
-            WHERE media_type='image'
-            ORDER BY id DESC
-            """
+            JOIN shots ON shots.id = media_results.shot_id
+            WHERE media_results.media_type='image'
+              AND shots.project_id=?
+            ORDER BY media_results.id DESC
+            """,
+            (project_id,),
         ).fetchall()
 
     completed = []
