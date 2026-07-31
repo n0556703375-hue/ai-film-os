@@ -85,14 +85,18 @@ class ContinuityIssueProjectOwnershipTests(unittest.TestCase):
         created = issues.create_issue(self._issue_data())
 
         with self.assertRaisesRegex(ValueError, "שוט מפרויקט אחר"):
-            issues.update_issue(created["id"], {
-                "shot_id": self.second["shot"]["id"],
-            })
+            issues.update_issue(
+                created["id"],
+                created["project_id"],
+                {"shot_id": self.second["shot"]["id"]},
+            )
 
         with self.assertRaisesRegex(ValueError, "נכס מפרויקט אחר"):
-            issues.update_issue(created["id"], {
-                "asset_id": self.second["asset"]["id"],
-            })
+            issues.update_issue(
+                created["id"],
+                created["project_id"],
+                {"asset_id": self.second["asset"]["id"]},
+            )
 
         stored = issues.list_issues(project_id=self.first["project"]["id"])
         self.assertEqual(len(stored), 1)
