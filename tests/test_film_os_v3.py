@@ -77,10 +77,13 @@ class FilmOSV3Tests(unittest.TestCase):
             "observed": "כחול חם",
             "resolution": "",
         })
-        updated = issues.update_issue(issue["id"], {"status": "נפתר", "resolution": "הגוון תוקן"})
+        updated = issues.update_issue(
+            issue["id"],
+            issue["project_id"],
+            {"status": "נפתר", "resolution": "הגוון תוקן"},
+        )
         self.assertEqual(updated["status"], "נפתר")
         self.assertEqual(updated["resolved"], 1)
-
 
     def test_scenes_shots_assets_and_issues_are_isolated_per_project(self):
         second_project = projects.create_project({
