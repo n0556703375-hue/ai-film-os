@@ -36,10 +36,18 @@ def update_issue(issue_id: int, update: ContinuityIssueUpdate):
 
 
 @router.patch("/{issue_id}/resolve")
-def resolve_issue(issue_id: int, resolved: bool = True):
-    if not repo.resolve_issue(issue_id, resolved):
-        raise HTTPException(404, "הבעיה לא נמצאה.")
-    return {"updated": True, "resolved": resolved}
+def resolve_issue(issue_id: int, project_id: int, resolved: bool = True):
+    try:
+        updated = repo.resolve_issue(issue_id, project_id, resolved)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if not updated:
+        raise HTTPException(404, "הבעיה לא נמצאה בפרויקט שנבחר.")
+    return {
+        "updated": True,
+        "resolved": resolved,
+        "project_id": project_id,
+    }
 
 
 @router.delete("/resolved")

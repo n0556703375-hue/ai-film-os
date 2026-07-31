@@ -80,7 +80,7 @@ class ContinuityFinalizationGateTests(unittest.TestCase):
 
     def test_resolved_high_issue_allows_finalization(self):
         issue = self._issue("high")
-        issues.resolve_issue(issue["id"], True)
+        issues.resolve_issue(issue["id"], self.project_id, True)
 
         pipeline = approvals.finalize_shot(self.shot["id"], "continuity cleared")
 
