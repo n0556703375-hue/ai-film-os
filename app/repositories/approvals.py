@@ -84,7 +84,7 @@ def decide_media(shot_id: int, media_id: int, decision: str, notes: str = ""):
             raise ValueError("תוצאת המדיה אינה שייכת לשוט.")
 
         if decision == "approve" and media["media_type"] == "image":
-            blocker = _identity_drift_blocker(media["metadata"])
+            blocker = _identity_drift_blocker(media["metadata_json"])
             if blocker:
                 raise ValueError(f"לא ניתן לאשר תמונה עם סטיית זהות חסומה: {blocker}")
 
