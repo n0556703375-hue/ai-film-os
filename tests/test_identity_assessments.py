@@ -104,7 +104,10 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
             },
         })
 
-        result = list_pending_identity_drift(limit=50)
+        result = list_pending_identity_drift(
+            project_id=self.project["id"],
+            limit=50,
+        )
 
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["items"][0]["media_id"], self.media["id"])
@@ -121,7 +124,10 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
             },
         })
 
-        result = list_pending_identity_drift(limit=1)
+        result = list_pending_identity_drift(
+            project_id=self.project["id"],
+            limit=1,
+        )
 
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["items"][0]["media_id"], self.media["id"])
@@ -140,7 +146,13 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
         self.assertEqual(assessment["worker_id"], "identity-worker-1")
         self.assertEqual(assessment["attempt"], 1)
         self.assertTrue(assessment["claimed_at"].endswith("+00:00"))
-        self.assertEqual(list_pending_identity_drift(limit=50)["count"], 0)
+        self.assertEqual(
+            list_pending_identity_drift(
+                project_id=self.project["id"],
+                limit=50,
+            )["count"],
+            0,
+        )
 
     def test_claim_rejects_duplicate_worker_pickup(self):
         request = IdentityDriftClaimRequest(worker_id="identity-worker-1")
@@ -184,7 +196,10 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
 
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["items"][0]["media_id"], self.media["id"])
-        pending = list_pending_identity_drift(limit=50)
+        pending = list_pending_identity_drift(
+            project_id=self.project["id"],
+            limit=50,
+        )
         self.assertEqual(pending["count"], 1)
         assessment = pending["items"][0]["identity_drift"]
         self.assertEqual(assessment["status"], "pending")
@@ -231,10 +246,17 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
         self.assertNotEqual(result["items"][0]["media_id"], second["id"])
 
     def test_records_passed_assessment_without_losing_provider_metadata(self):
+        worker_id = "identity-worker-record"
+        claim_identity_drift(
+            self.shot["id"],
+            self.media["id"],
+            IdentityDriftClaimRequest(worker_id=worker_id),
+        )
         result = record_identity_drift(
             self.shot["id"],
             self.media["id"],
             IdentityDriftAssessmentRequest(
+                worker_id=worker_id,
                 status="passed",
                 passed=True,
                 score=0.94,
@@ -251,10 +273,17 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
         self.assertEqual(metadata["identity_drift"]["score"], 0.94)
 
     def test_evaluates_and_records_normalized_provider_output(self):
+        worker_id = "identity-worker-evaluate"
+        claim_identity_drift(
+            self.shot["id"],
+            self.media["id"],
+            IdentityDriftClaimRequest(worker_id=worker_id),
+        )
         result = evaluate_and_record_identity_drift(
             self.shot["id"],
             self.media["id"],
             IdentityDriftEvaluationRequest(
+                worker_id=worker_id,
                 identity_similarity=0.91,
                 flags=["lighting_changed", "lighting_changed"],
                 evidence={"reference_media_id": 7},
@@ -273,10 +302,17 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
         self.assertEqual(assessment["model"], "identity-v2")
 
     def test_evaluation_blocks_critical_identity_flag(self):
+        worker_id = "identity-worker-block"
+        claim_identity_drift(
+            self.shot["id"],
+            self.media["id"],
+            IdentityDriftClaimRequest(worker_id=worker_id),
+        )
         result = evaluate_and_record_identity_drift(
             self.shot["id"],
             self.media["id"],
             IdentityDriftEvaluationRequest(
+                worker_id=worker_id,
                 identity_similarity=0.99,
                 flags=["different_person"],
             ),
@@ -289,7 +325,11 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
 
     def test_rejects_inconsistent_passed_outcome(self):
         with self.assertRaises(ValidationError):
-            IdentityDriftAssessmentRequest(status="passed", passed=False)
+            IdentityDriftAssessmentRequest(
+                worker_id="identity-worker-validation",
+                status="passed",
+                passed=False,
+            )
 
 
 if __name__ == "__main__":
