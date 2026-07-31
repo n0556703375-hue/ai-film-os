@@ -66,15 +66,25 @@ def replace_shot_issues(shot_id: int, issues: list[dict]):
         conn.commit()
 
 
-def resolve_issue(issue_id: int, resolved: bool):
+def resolve_issue(issue_id: int, project_id: int, resolved: bool):
     with closing(get_connection()) as conn:
+        if not conn.execute(
+            "SELECT 1 FROM projects WHERE id=?", (project_id,)
+        ).fetchone():
+            raise ValueError("הפרויקט שנבחר אינו קיים.")
         cur = conn.execute("""
             UPDATE continuity_issues
             SET resolved=?,
                 status=CASE WHEN ?=1 THEN 'נפתר' ELSE 'פתוח' END,
                 resolved_at=CASE WHEN ?=1 THEN CURRENT_TIMESTAMP ELSE NULL END
-            WHERE id=?
-        """, (int(resolved), int(resolved), int(resolved), issue_id))
+            WHERE id=? AND project_id=?
+        """, (
+            int(resolved),
+            int(resolved),
+            int(resolved),
+            issue_id,
+            project_id,
+        ))
         conn.commit()
     return cur.rowcount > 0
 
