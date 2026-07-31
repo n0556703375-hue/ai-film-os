@@ -25,13 +25,16 @@ def create_issue(issue: ContinuityIssueCreate):
 
 
 @router.patch("/{issue_id}")
-def update_issue(issue_id: int, update: ContinuityIssueUpdate):
+def update_issue(issue_id: int, project_id: int, update: ContinuityIssueUpdate):
     fields = update.model_dump(exclude_none=True)
     if not fields:
         raise HTTPException(400, "לא התקבלו שדות לעדכון.")
-    issue = repo.update_issue(issue_id, fields)
+    try:
+        issue = repo.update_issue(issue_id, project_id, fields)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     if not issue:
-        raise HTTPException(404, "הבעיה לא נמצאה.")
+        raise HTTPException(404, "הבעיה לא נמצאה בפרויקט שנבחר.")
     return issue
 
 
