@@ -178,9 +178,11 @@ def _run_resumable_import(
     }
 
 
-def _snapshot_counts(snapshot: dict[str, Any]) -> dict[str, int]:
+def _snapshot_counts(snapshot: dict[str, Any], *, expected_project_id: int) -> dict[str, int]:
     project = snapshot.get("project") or {}
     project_id = int(project.get("id") or 0)
+    if project_id != expected_project_id:
+        raise SmokeFailure("Production snapshot returned an unexpected project")
     scenes = snapshot.get("scenes") or []
     shots = snapshot.get("shots") or []
     if any(int(item.get("project_id") or 0) != project_id for item in scenes):
@@ -203,7 +205,7 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
     before = _request_json(config, snapshot_path)
     if not isinstance(before, dict):
         raise SmokeFailure("Production snapshot response has an invalid shape")
-    before_counts = _snapshot_counts(before)
+    before_counts = _snapshot_counts(before, expected_project_id=config.project_id)
     existing_shot_scene_ids = _scene_ids_with_shots(before)
 
     result: dict[str, Any] = {
@@ -232,7 +234,7 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
         after = _request_json(config, snapshot_path)
         if not isinstance(after, dict):
             raise SmokeFailure("Post-import production snapshot has an invalid shape")
-        after_counts = _snapshot_counts(after)
+        after_counts = _snapshot_counts(after, expected_project_id=config.project_id)
         if after_counts["scenes"] < before_counts["scenes"] or after_counts["shots"] < before_counts["shots"]:
             raise SmokeFailure("Production counts decreased after non-replacing import")
         result.update({"import_executed": True, **imported, "after": after_counts})
