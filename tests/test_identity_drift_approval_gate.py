@@ -20,7 +20,7 @@ class IdentityDriftApprovalGateTests(unittest.TestCase):
             '{"identity_drift":{"status":"blocked","passed":false,"reasons":[]}}'
         )
 
-        self.assertEqual("בדיקת זהות הדמות נכשלה.", blocker)
+        self.assertEqual("בדיקת זהות הדמות לא עברה בהצלחה.", blocker)
 
     def test_allows_passed_or_missing_assessment(self):
         self.assertIsNone(_identity_drift_blocker({

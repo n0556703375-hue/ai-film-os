@@ -81,7 +81,6 @@ class FilmOSV3Tests(unittest.TestCase):
         self.assertEqual(updated["status"], "נפתר")
         self.assertEqual(updated["resolved"], 1)
 
-
     def test_scenes_shots_assets_and_issues_are_isolated_per_project(self):
         second_project = projects.create_project({
             "name": "פרויקט שני",
@@ -143,10 +142,15 @@ class FilmOSV3Tests(unittest.TestCase):
         })
         reference = assets.create_reference_image(character["id"], {
             "view_type": "portrait", "url": "https://example.com/portrait.png",
-            "prompt": "identity portrait", "metadata": {"magnific_task_id": "task-1"},
+            "prompt": "identity portrait", "approved": True,
+            "metadata": {"magnific_task_id": "task-1"},
         })
+        assets.lock_asset(character["id"], reference["id"])
+
         self.assertEqual(reference["view_type"], "portrait")
         loaded = assets.get_asset(character["id"])
+        self.assertEqual(loaded["lock_status"], "locked")
+        self.assertEqual(loaded["master_reference_id"], reference["id"])
         self.assertEqual(loaded["reference_url"], reference["url"])
         self.assertEqual(len(loaded["reference_images"]), 1)
         fetched = assets.get_reference_image(character["id"], reference["id"])
