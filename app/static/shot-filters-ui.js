@@ -90,7 +90,7 @@ async function previewBatchFinalize() {
   pendingBatchFinalizeIds = [...selectedShotIds];
   const preview = await api("/api/shots/batch/finalize-preview", {
     method: "POST",
-    body: JSON.stringify({ shot_ids: pendingBatchFinalizeIds }),
+    body: JSON.stringify({ project_id: currentProjectId, shot_ids: pendingBatchFinalizeIds }),
   });
   const actionable = preview.items.filter((item) => item.eligible && !item.already_final).length;
   const alreadyFinal = preview.items.filter((item) => item.already_final).length;
@@ -113,6 +113,7 @@ async function confirmBatchFinalize() {
   const result = await api("/api/shots/batch/finalize", {
     method: "POST",
     body: JSON.stringify({
+      project_id: currentProjectId,
       shot_ids: pendingBatchFinalizeIds,
       notes: $("batchFinalizeNotes")?.value || "",
       confirmed: true,

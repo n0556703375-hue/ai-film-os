@@ -50,7 +50,7 @@ async function decideMedia(shotId, mediaId, decision) {
   try {
     await api(`/api/shots/${shotId}/media/${mediaId}/decision`, {
       method: "POST",
-      body: JSON.stringify({decision, notes}),
+      body: JSON.stringify({project_id: currentProjectId, decision, notes}),
     });
     await openShot(shotId);
   } catch (error) {
@@ -63,7 +63,7 @@ async function finalizeShot(shotId) {
   try {
     await api(`/api/shots/${shotId}/finalize`, {
       method: "POST",
-      body: JSON.stringify({notes: "אושר מתוך Shot Workspace"}),
+      body: JSON.stringify({project_id: currentProjectId, notes: "אושר מתוך Shot Workspace"}),
     });
     await openShot(shotId);
   } catch (error) {

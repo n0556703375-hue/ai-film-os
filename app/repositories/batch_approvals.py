@@ -1,7 +1,7 @@
 from app.repositories.approvals import decide_media, finalize_shot
 
 
-def batch_approval(action: str, items: list[dict], notes: str = ""):
+def batch_approval(action: str, items: list[dict], project_id: int, notes: str = ""):
     """Apply existing approval rules independently and report every item."""
     results = []
     for item in items:
@@ -9,9 +9,9 @@ def batch_approval(action: str, items: list[dict], notes: str = ""):
         media_id = item.get("media_id")
         try:
             pipeline = (
-                finalize_shot(shot_id, notes)
+                finalize_shot(shot_id, project_id, notes)
                 if action == "finalize"
-                else decide_media(shot_id, media_id, action, notes)
+                else decide_media(shot_id, media_id, action, project_id, notes)
             )
             if pipeline is None:
                 results.append({

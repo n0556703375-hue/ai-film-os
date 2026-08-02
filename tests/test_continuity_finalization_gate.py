@@ -73,7 +73,7 @@ class ContinuityFinalizationGateTests(unittest.TestCase):
         self._issue("high")
 
         with self.assertRaises(ValueError) as raised:
-            approvals.finalize_shot(self.shot["id"])
+            approvals.finalize_shot(self.shot["id"], self.project_id)
 
         self.assertIn("בחומרה גבוהה", str(raised.exception))
         self.assertNotEqual(shots.get_shot(self.shot["id"])["status"], "סופי")
@@ -82,21 +82,21 @@ class ContinuityFinalizationGateTests(unittest.TestCase):
         issue = self._issue("high")
         issues.resolve_issue(issue["id"], self.project_id, True)
 
-        pipeline = approvals.finalize_shot(self.shot["id"], "continuity cleared")
+        pipeline = approvals.finalize_shot(self.shot["id"], self.project_id, "continuity cleared")
 
         self.assertEqual(pipeline["status"], "סופי")
 
     def test_approved_exception_allows_finalization(self):
         self._issue("critical", "אושר כחריגה")
 
-        pipeline = approvals.finalize_shot(self.shot["id"])
+        pipeline = approvals.finalize_shot(self.shot["id"], self.project_id)
 
         self.assertEqual(pipeline["status"], "סופי")
 
     def test_medium_issue_does_not_block_finalization(self):
         self._issue("medium")
 
-        pipeline = approvals.finalize_shot(self.shot["id"])
+        pipeline = approvals.finalize_shot(self.shot["id"], self.project_id)
 
         self.assertEqual(pipeline["status"], "סופי")
 
