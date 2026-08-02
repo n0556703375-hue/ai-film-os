@@ -42,6 +42,7 @@ def process_identity_assessment(
             adapter=adapter,
         )
         request = IdentityDriftAssessmentRequest(
+            worker_id=worker_id,
             status=verdict["status"],
             passed=verdict["passed"],
             score=verdict.get("identity_similarity"),
@@ -51,6 +52,7 @@ def process_identity_assessment(
         )
     except Exception as exc:
         request = IdentityDriftAssessmentRequest(
+            worker_id=worker_id,
             status="error",
             passed=False,
             reasons=[f"Identity assessment worker failed: {type(exc).__name__}."],
