@@ -8,6 +8,7 @@ from app.api.video_generation import VideoQueueRequest, queue_video
 from app.core.config import settings
 from app.database.connection import init_db
 from app.repositories import jobs, projects, scenes, shots
+from app.services.video_model_selector import select_video_model
 
 
 class VideoGenerationApiTests(unittest.TestCase):
@@ -81,6 +82,26 @@ class VideoGenerationApiTests(unittest.TestCase):
         self.assertEqual(payload["audio_mode"], "ambient")
         self.assertEqual(payload["model_hint"], "cinematic")
         self.assertEqual(len(jobs.list_jobs(shot_id=self.shot["id"])), 1)
+
+    def test_stored_model_profile_matches_what_the_worker_will_select(self):
+        shots.create_media_result(self.shot["id"], {
+            "media_type": "image",
+            "url": "https://example.com/approved.jpg",
+            "status": "מאושר",
+        })
+        request = VideoQueueRequest(
+            duration_seconds=10,
+            camera_motion="handheld chase",
+            audio_mode="none",
+        )
+
+        result = queue_video(self.shot["id"], request)
+
+        payload = result["job"]["payload"]
+        shot = shots.get_shot(self.shot["id"])
+        worker_time_selection = select_video_model(shot, payload)
+        self.assertEqual(payload["selected_model_profile"], worker_time_selection.profile)
+        self.assertEqual(payload["model_selection_reason"], worker_time_selection.reason)
 
 
 if __name__ == "__main__":

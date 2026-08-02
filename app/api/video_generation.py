@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.repositories import jobs, shots
-from app.services.video_model_selection import select_video_model_profile
+from app.services.video_model_selector import select_video_model
 
 
 router = APIRouter(prefix="/api/video-generation", tags=["video-generation"])
@@ -81,7 +81,7 @@ def queue_video(shot_id: int, request: VideoQueueRequest):
     versions = shots.list_prompt_versions(shot_id)
     prompt_version_id = versions[0]["id"] if versions else None
     request_data = request.model_dump()
-    model_profile = select_video_model_profile(shot, request_data)
+    model_profile = select_video_model(shot, request_data)
     payload = {
         "prompt": shot.get("prompt", ""),
         "prompt_version_id": prompt_version_id,
@@ -91,7 +91,7 @@ def queue_video(shot_id: int, request: VideoQueueRequest):
         "audio_mode": request.audio_mode,
         "aspect_ratio": request.aspect_ratio,
         "model_hint": request.model_hint,
-        "selected_model_profile": model_profile.name,
+        "selected_model_profile": model_profile.profile,
         "model_selection_reason": model_profile.reason,
         "instructions": request.instructions,
     }
@@ -106,7 +106,7 @@ def queue_video(shot_id: int, request: VideoQueueRequest):
     return {
         "created": created,
         "media_type": "video",
-        "selected_model_profile": model_profile.name,
+        "selected_model_profile": model_profile.profile,
         "model_selection_reason": model_profile.reason,
         "job": job,
     }
