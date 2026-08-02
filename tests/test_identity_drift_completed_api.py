@@ -55,8 +55,8 @@ class IdentityDriftCompletedApiTests(unittest.TestCase):
         self.assertNotIn("evidence", summary)
         self.assertNotIn("raw_provider_payload", summary)
         sql = connection.execute.call_args.args[0]
-        self.assertIn("WHERE media_type='image'", sql)
-        self.assertIn("ORDER BY id DESC", sql)
+        self.assertIn("WHERE media_results.media_type='image'", sql)
+        self.assertIn("ORDER BY media_results.id DESC", sql)
         connection.close.assert_called_once_with()
 
     @patch("app.api.identity_assessments.get_connection")
