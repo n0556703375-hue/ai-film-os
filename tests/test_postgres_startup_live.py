@@ -6,15 +6,15 @@ from app.database.startup import build_database_startup_adapter
 from app.database.validate_postgres_schema import validate_postgres_startup_connection
 
 
-@unittest.skipUnless(os.environ.get("CI") == "true", "requires the isolated CI PostgreSQL service")
+@unittest.skipUnless(
+    os.environ.get("POSTGRES_TEST_DATABASE_URL"),
+    "requires POSTGRES_TEST_DATABASE_URL for an isolated PostgreSQL test service",
+)
 class PostgreSQLStartupLiveTests(unittest.TestCase):
     def test_gated_startup_uses_real_read_only_schema_validation(self):
         import psycopg
 
-        database_url = (
-            "postgresql://film_os_ci:film_os_ci_password@localhost:5432/"
-            "film_os_validation"
-        )
+        database_url = os.environ["POSTGRES_TEST_DATABASE_URL"]
         migrate = Mock()
         seed = Mock()
 

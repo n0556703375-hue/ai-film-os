@@ -11,14 +11,16 @@ class ScriptImportBackendProgressUiTests(unittest.TestCase):
     def setUpClass(cls):
         cls.source = TEMPLATE.read_text(encoding="utf-8")
 
-    def test_backend_progress_overrides_local_persisted_counts(self):
-        self.assertIn("const backend=error&&error.progress", self.source)
-        self.assertIn("backend.scenes_created??localProgress.scenesCreated", self.source)
-        self.assertIn("backend.shots_created??localProgress.shotsCreated", self.source)
+    def test_retry_state_preserves_progress_for_each_resumable_stage(self):
+        self.assertIn("retryState={type:'breakdown',state}", self.source)
+        self.assertIn("retryState={type:'persist',state,progress}", self.source)
+        self.assertIn("retryState={type:'shot-map',scenes,index,progress}", self.source)
+        self.assertIn("await continueImport(saved.state,{scenesCreated:0,shotsCreated:0})", self.source)
+        self.assertIn("await createShotMaps(saved.scenes,saved.index,saved.progress)", self.source)
 
-    def test_backend_failed_scene_number_is_rendered(self):
-        self.assertIn("failedSceneNumber:backend.failed_scene_number||null", self.source)
-        self.assertIn("יצירת מפת השוטים לסצנה ${progress.failedSceneNumber}", self.source)
+    def test_shot_map_progress_renders_current_scene_position(self):
+        self.assertIn("`יוצרת מפת שוטים לסצנה ${index+1} מתוך ${scenes.length} · ${count} שוטים`", self.source)
+        self.assertIn("progress.shotsCreated+=(created.shots||[]).length", self.source)
 
     def test_non_destructive_shot_map_generation_is_preserved(self):
         self.assertIn("replace_existing:false", self.source)

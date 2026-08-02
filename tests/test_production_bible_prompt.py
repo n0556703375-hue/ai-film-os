@@ -50,7 +50,7 @@ class ProductionBiblePromptTests(unittest.TestCase):
         self.assertLess(prompt.index("PRODUCTION BIBLE"), prompt.index("SHOT\n"))
         self.assertLess(prompt.index("women only"), prompt.index("ACTION\n"))
 
-    @patch("app.services.prompt_builder.apply_scene_asset_variants", side_effect=lambda shot: shot)
+    @patch("app.services.prompt_builder.apply_scene_asset_variants")
     @patch("app.services.prompt_builder.projects.get_project")
     def test_scene_variant_propagation_remains_in_pipeline(self, get_project, apply_variants):
         get_project.return_value = {"visual_style": "", "rules": ""}

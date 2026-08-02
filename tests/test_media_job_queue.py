@@ -79,24 +79,24 @@ class MediaJobQueueTests(unittest.TestCase):
         failed = jobs.fail_job(queued["id"], "permanent", retryable=True)
         self.assertEqual(failed["status"], "failed")
 
-    def test_failed_job_can_be_requeued_with_same_idempotency_key(self):
+    def test_duplicate_failed_submission_remains_idempotent(self):
         queued, _ = jobs.enqueue_job(
             self.project_id, self.shot["id"], "image", {"prompt": "first"}, "shot-1-image-v3", max_attempts=1
         )
         jobs.claim_next_job("worker")
-        jobs.fail_job(queued["id"], "provider outage", retryable=True)
+        failed = jobs.fail_job(queued["id"], "provider outage", retryable=True)
 
-        requeued, created = jobs.enqueue_job(
+        duplicate, created = jobs.enqueue_job(
             self.project_id, self.shot["id"], "image", {"prompt": "second"}, "shot-1-image-v3", max_attempts=2
         )
 
-        self.assertTrue(created)
-        self.assertEqual(requeued["id"], queued["id"])
-        self.assertEqual(requeued["status"], "queued")
-        self.assertEqual(requeued["attempts"], 0)
-        self.assertEqual(requeued["max_attempts"], 2)
-        self.assertEqual(requeued["payload"]["prompt"], "second")
-        self.assertEqual(requeued["last_error"], "")
+        self.assertFalse(created)
+        self.assertEqual(duplicate["id"], queued["id"])
+        self.assertEqual(duplicate["status"], "failed")
+        self.assertEqual(duplicate["attempts"], failed["attempts"])
+        self.assertEqual(duplicate["max_attempts"], 1)
+        self.assertEqual(duplicate["payload"]["prompt"], "first")
+        self.assertEqual(duplicate["last_error"], "provider outage")
 
     def test_enqueue_rejects_invalid_retry_budget(self):
         with self.assertRaises(ValueError):

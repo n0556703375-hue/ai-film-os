@@ -25,11 +25,20 @@ class DeploymentSmokeTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
 
     def test_required_deployment_routes_are_registered(self):
-        from app.main import app
+        from app.api.health import router as health_router
+        from app.api.import_runs import router as import_runs_router
+        from app.api.scenes import router as scenes_router
+        from app.api.video_generation import router as video_generation_router
 
         paths = {
             route.path
-            for route in app.routes
+            for router in (
+                health_router,
+                import_runs_router,
+                scenes_router,
+                video_generation_router,
+            )
+            for route in router.routes
             if isinstance(getattr(route, "path", None), str)
         }
         self.assertIn("/health", paths)

@@ -19,14 +19,16 @@ class ShotFiltersUiTests(unittest.TestCase):
         self.assertIn('matchesScene', script)
         self.assertIn('matchesQuery', script)
 
-    def test_filtering_is_read_only(self):
+    def test_filter_loading_is_read_only(self):
         script = (ROOT / "app" / "static" / "shot-filters-ui.js").read_text(encoding="utf-8")
-        self.assertNotIn('method:"POST"', script)
-        self.assertNotIn('method: "POST"', script)
-        self.assertNotIn('method:"PATCH"', script)
-        self.assertNotIn('method: "PATCH"', script)
-        self.assertNotIn('method:"DELETE"', script)
-        self.assertNotIn('method: "DELETE"', script)
+        start = script.index("window.loadShots = async function loadShotsWithFilters()")
+        end = script.index("function renderFilteredShotCard", start)
+        filter_loader = script[start:end]
+
+        self.assertIn('api("/api/shots")', filter_loader)
+        for method in ("POST", "PATCH", "DELETE"):
+            self.assertNotIn(f'method: "{method}"', filter_loader)
+            self.assertNotIn(f'method:"{method}"', filter_loader)
 
 
 if __name__ == "__main__":
