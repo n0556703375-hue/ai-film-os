@@ -11,8 +11,10 @@ from app.repositories.approvals import finalize_batch
 class BatchFinalizeTests(unittest.TestCase):
     def test_schema_requires_explicit_true_confirmation(self):
         with self.assertRaises(ValidationError):
-            BatchFinalizeRequest(shot_ids=[1], confirmed=False)
-        request = BatchFinalizeRequest(shot_ids=[1], confirmed=True, notes="approved batch")
+            BatchFinalizeRequest(project_id=1, shot_ids=[1], confirmed=False)
+        request = BatchFinalizeRequest(
+            project_id=1, shot_ids=[1], confirmed=True, notes="approved batch"
+        )
         self.assertTrue(request.confirmed)
 
     def test_batch_is_partial_deduplicated_and_preserves_blockers(self):
@@ -31,7 +33,7 @@ class BatchFinalizeTests(unittest.TestCase):
             "app.repositories.approvals.finalize_shot",
             side_effect=[{"status": "סופי"}, ValueError("קיימת בעיית רציפות חוסמת.")],
         ) as finalize:
-            result = finalize_batch([1, 2, 1, 3, 4], "batch note")
+            result = finalize_batch([1, 2, 1, 3, 4], 9, "batch note")
 
         self.assertEqual(finalize.call_count, 2)
         self.assertEqual(result["requested"], 5)
@@ -44,7 +46,7 @@ class BatchFinalizeTests(unittest.TestCase):
         ])
 
     def test_endpoint_forwards_confirmed_request(self):
-        request = BatchFinalizeRequest(shot_ids=[8, 9], confirmed=True, notes="ready")
+        request = BatchFinalizeRequest(project_id=3, shot_ids=[8, 9], confirmed=True, notes="ready")
         expected = {
             "requested": 2,
             "unique": 2,
@@ -55,7 +57,7 @@ class BatchFinalizeTests(unittest.TestCase):
         }
         with patch("app.api.approvals.repo.finalize_batch", return_value=expected) as batch:
             result = finalize_batch_endpoint(request)
-        batch.assert_called_once_with([8, 9], "ready")
+        batch.assert_called_once_with([8, 9], 3, "ready")
         self.assertEqual(result, expected)
 
 

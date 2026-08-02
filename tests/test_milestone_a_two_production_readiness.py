@@ -63,8 +63,8 @@ class MilestoneATwoProductionReadinessTests(unittest.TestCase):
             "url": f"https://example.com/{marker}.mp4",
             "status": "טיוטה",
         })
-        approvals.decide_media(shot["id"], image["id"], "approve")
-        approvals.decide_media(shot["id"], video["id"], "approve")
+        approvals.decide_media(shot["id"], image["id"], "approve", project["id"])
+        approvals.decide_media(shot["id"], video["id"], "approve", project["id"])
         return {
             "project": project,
             "scene": scene,
@@ -83,7 +83,9 @@ class MilestoneATwoProductionReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "סצנה מפרויקט אחר"):
             shots.update_shot(first["shot"]["id"], {"scene_id": second["scene"]["id"]})
         with self.assertRaisesRegex(ValueError, "אינה שייכת לשוט"):
-            approvals.decide_media(first["shot"]["id"], second["video"]["id"], "approve")
+            approvals.decide_media(
+                first["shot"]["id"], second["video"]["id"], "approve", first["project"]["id"]
+            )
 
         first_after_rejections = shots.get_shot(first["shot"]["id"])
         self.assertEqual(first_after_rejections["scene_id"], first["scene"]["id"])
@@ -114,12 +116,18 @@ class MilestoneATwoProductionReadinessTests(unittest.TestCase):
             "status": "פתוח",
         })
 
-        first_preview = approvals.preview_batch_finalize([first["shot"]["id"]])
-        second_preview = approvals.preview_batch_finalize([second["shot"]["id"]])
+        first_preview = approvals.preview_batch_finalize(
+            [first["shot"]["id"]], first["project"]["id"]
+        )
+        second_preview = approvals.preview_batch_finalize(
+            [second["shot"]["id"]], second["project"]["id"]
+        )
         self.assertEqual(first_preview["eligible"], 1)
         self.assertEqual(second_preview["eligible"], 0)
 
-        finalized = approvals.finalize_shot(first["shot"]["id"], "milestone A")
+        finalized = approvals.finalize_shot(
+            first["shot"]["id"], first["project"]["id"], "milestone A"
+        )
         self.assertEqual(finalized["status"], "סופי")
         self.assertEqual(approvals.get_pipeline(second["shot"]["id"])["status"], "וידאו מאושר")
 

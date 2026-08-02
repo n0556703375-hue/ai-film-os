@@ -11,11 +11,12 @@ from app.repositories.batch_approvals import batch_approval as repository_batch_
 class BatchApprovalTests(unittest.TestCase):
     def test_requires_media_id_for_decisions(self):
         with self.assertRaises(ValidationError):
-            BatchApprovalRequest(action="approve", items=[{"shot_id": 1}])
+            BatchApprovalRequest(project_id=1, action="approve", items=[{"shot_id": 1}])
 
     def test_finalize_rejects_media_id(self):
         with self.assertRaises(ValidationError):
             BatchApprovalRequest(
+                project_id=1,
                 action="finalize",
                 items=[{"shot_id": 1, "media_id": 2}],
             )
@@ -23,6 +24,7 @@ class BatchApprovalTests(unittest.TestCase):
     def test_rejects_duplicate_items(self):
         with self.assertRaises(ValidationError):
             BatchApprovalRequest(
+                project_id=1,
                 action="reject",
                 items=[
                     {"shot_id": 1, "media_id": 2},
@@ -32,6 +34,7 @@ class BatchApprovalTests(unittest.TestCase):
 
     def test_api_forwards_validated_batch(self):
         request = BatchApprovalRequest(
+            project_id=9,
             action="approve",
             items=[{"shot_id": 1, "media_id": 4}],
             notes="ready",
@@ -42,6 +45,7 @@ class BatchApprovalTests(unittest.TestCase):
         mocked.assert_called_once_with(
             action="approve",
             items=[{"shot_id": 1, "media_id": 4}],
+            project_id=9,
             notes="ready",
         )
 
@@ -56,6 +60,7 @@ class BatchApprovalTests(unittest.TestCase):
                     {"shot_id": 1, "media_id": 10},
                     {"shot_id": 2, "media_id": 20},
                 ],
+                9,
             )
         self.assertEqual(result["succeeded"], 1)
         self.assertEqual(result["failed"], 1)
@@ -70,9 +75,10 @@ class BatchApprovalTests(unittest.TestCase):
             result = repository_batch_approval(
                 "finalize",
                 [{"shot_id": 7, "media_id": None}],
+                9,
                 "done",
             )
-        mocked.assert_called_once_with(7, "done")
+        mocked.assert_called_once_with(7, 9, "done")
         self.assertEqual(result["succeeded"], 1)
 
 

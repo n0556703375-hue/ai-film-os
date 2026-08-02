@@ -133,10 +133,12 @@ class MediaResultCreate(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 class MediaDecisionRequest(BaseModel):
+    project_id: int = Field(ge=1)
     decision: Literal["approve", "reject"]
     notes: str = Field(default="", max_length=5000)
 
 class ShotFinalizeRequest(BaseModel):
+    project_id: int = Field(ge=1)
     notes: str = Field(default="", max_length=5000)
 
 class BatchApprovalItem(BaseModel):
@@ -144,6 +146,7 @@ class BatchApprovalItem(BaseModel):
     media_id: int | None = Field(default=None, ge=1)
 
 class BatchApprovalRequest(BaseModel):
+    project_id: int = Field(ge=1)
     action: Literal["approve", "reject", "finalize"]
     items: list[BatchApprovalItem] = Field(min_length=1, max_length=100)
     notes: str = Field(default="", max_length=5000)
@@ -160,6 +163,7 @@ class BatchApprovalRequest(BaseModel):
         return self
 
 class BatchFinalizePreviewRequest(BaseModel):
+    project_id: int = Field(ge=1)
     shot_ids: list[int] = Field(min_length=1, max_length=100)
 
 class BatchFinalizeRequest(BatchFinalizePreviewRequest):

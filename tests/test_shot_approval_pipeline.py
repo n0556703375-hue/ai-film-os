@@ -31,6 +31,7 @@ class ShotApprovalPipelineTests(unittest.TestCase):
             "ending": "",
             "notes": "",
         })
+        self.project_id = project["id"]
         self.shot = shots.create_shot({
             "project_id": project["id"],
             "scene_id": scene["id"],
@@ -55,25 +56,59 @@ class ShotApprovalPipelineTests(unittest.TestCase):
 
     def test_video_requires_approved_image(self):
         with self.assertRaisesRegex(ValueError, "תמונת שוט"):
-            approvals.decide_media(self.shot["id"], self.video["id"], "approve")
+            approvals.decide_media(self.shot["id"], self.video["id"], "approve", self.project_id)
 
     def test_approval_progresses_and_finalizes_shot(self):
-        pipeline = approvals.decide_media(self.shot["id"], self.image["id"], "approve", "image ok")
+        pipeline = approvals.decide_media(
+            self.shot["id"], self.image["id"], "approve", self.project_id, "image ok"
+        )
         self.assertEqual(pipeline["status"], "וידאו טיוטה")
 
-        pipeline = approvals.decide_media(self.shot["id"], self.video["id"], "approve", "video ok")
+        pipeline = approvals.decide_media(
+            self.shot["id"], self.video["id"], "approve", self.project_id, "video ok"
+        )
         self.assertEqual(pipeline["status"], "וידאו מאושר")
 
-        pipeline = approvals.finalize_shot(self.shot["id"], "final")
+        pipeline = approvals.finalize_shot(self.shot["id"], self.project_id, "final")
         self.assertEqual(pipeline["status"], "סופי")
         self.assertEqual(len(pipeline["approval_events"]), 3)
 
     def test_rejecting_approved_media_rolls_pipeline_back(self):
-        approvals.decide_media(self.shot["id"], self.image["id"], "approve")
-        pipeline = approvals.decide_media(self.shot["id"], self.image["id"], "reject", "redo")
+        approvals.decide_media(self.shot["id"], self.image["id"], "approve", self.project_id)
+        pipeline = approvals.decide_media(
+            self.shot["id"], self.image["id"], "reject", self.project_id, "redo"
+        )
         self.assertEqual(pipeline["status"], "תמונת טיוטה")
         image = next(item for item in pipeline["media_results"] if item["id"] == self.image["id"])
         self.assertEqual(image["status"], "נדחה")
+
+    def test_decide_media_rejects_a_correct_pair_under_the_wrong_project(self):
+        other_project = projects.create_project({
+            "name": "Wrong Project",
+            "description": "",
+            "visual_style": "",
+            "rules": "",
+        })
+
+        result = approvals.decide_media(
+            self.shot["id"], self.image["id"], "approve", other_project["id"]
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(shots.get_shot(self.shot["id"])["status"], "פרומפט מוכן")
+
+    def test_finalize_shot_rejects_the_wrong_project(self):
+        other_project = projects.create_project({
+            "name": "Wrong Project",
+            "description": "",
+            "visual_style": "",
+            "rules": "",
+        })
+
+        result = approvals.finalize_shot(self.shot["id"], other_project["id"])
+
+        self.assertIsNone(result)
+        self.assertEqual(shots.get_shot(self.shot["id"])["status"], "פרומפט מוכן")
 
     def test_approval_history_and_media_decisions_are_isolated_between_projects(self):
         other_project = projects.create_project({
@@ -108,13 +143,13 @@ class ShotApprovalPipelineTests(unittest.TestCase):
         })
 
         with self.assertRaisesRegex(ValueError, "אינה שייכת לשוט"):
-            approvals.decide_media(self.shot["id"], other_image["id"], "approve")
+            approvals.decide_media(self.shot["id"], other_image["id"], "approve", self.project_id)
 
         first_pipeline = approvals.decide_media(
-            self.shot["id"], self.image["id"], "approve", "first project",
+            self.shot["id"], self.image["id"], "approve", self.project_id, "first project",
         )
         other_pipeline = approvals.decide_media(
-            other_shot["id"], other_image["id"], "approve", "other project",
+            other_shot["id"], other_image["id"], "approve", other_project["id"], "other project",
         )
 
         self.assertEqual(

@@ -69,11 +69,13 @@ def _identity_drift_blocker(metadata):
     return "בדיקת זהות הדמות לא עברה בהצלחה."
 
 
-def decide_media(shot_id: int, media_id: int, decision: str, notes: str = ""):
+def decide_media(shot_id: int, media_id: int, decision: str, project_id: int, notes: str = ""):
     if decision not in {"approve", "reject"}:
         raise ValueError("החלטת האישור אינה תקינה.")
     with closing(get_connection()) as conn:
-        shot = conn.execute("SELECT * FROM shots WHERE id=?", (shot_id,)).fetchone()
+        shot = conn.execute(
+            "SELECT * FROM shots WHERE id=? AND project_id=?", (shot_id, project_id)
+        ).fetchone()
         if not shot:
             return None
         media = conn.execute(
@@ -146,9 +148,11 @@ def _blocking_continuity_issue(conn, shot_id: int):
     ).fetchone()
 
 
-def finalize_shot(shot_id: int, notes: str = ""):
+def finalize_shot(shot_id: int, project_id: int, notes: str = ""):
     with closing(get_connection()) as conn:
-        shot = conn.execute("SELECT * FROM shots WHERE id=?", (shot_id,)).fetchone()
+        shot = conn.execute(
+            "SELECT * FROM shots WHERE id=? AND project_id=?", (shot_id, project_id)
+        ).fetchone()
         if not shot:
             return None
         approved_image = conn.execute(
@@ -203,13 +207,16 @@ def get_pipeline(shot_id: int):
     }
 
 
-def preview_batch_finalize(shot_ids: list[int]):
+def preview_batch_finalize(shot_ids: list[int], project_id: int):
     """Return finalization eligibility without changing any production records."""
     unique_ids = list(dict.fromkeys(shot_ids))
     results = []
     with closing(get_connection()) as conn:
         for shot_id in unique_ids:
-            shot = conn.execute("SELECT id,status FROM shots WHERE id=?", (shot_id,)).fetchone()
+            shot = conn.execute(
+                "SELECT id,status FROM shots WHERE id=? AND project_id=?",
+                (shot_id, project_id),
+            ).fetchone()
             reasons = []
             if not shot:
                 results.append({"shot_id": shot_id, "eligible": False, "reasons": ["השוט לא נמצא."]})
@@ -241,9 +248,9 @@ def preview_batch_finalize(shot_ids: list[int]):
     }
 
 
-def finalize_batch(shot_ids: list[int], notes: str = ""):
+def finalize_batch(shot_ids: list[int], project_id: int, notes: str = ""):
     """Finalize eligible shots independently and return explicit partial results."""
-    preview = preview_batch_finalize(shot_ids)
+    preview = preview_batch_finalize(shot_ids, project_id)
     results = []
     for item in preview["items"]:
         shot_id = item["shot_id"]
@@ -254,7 +261,7 @@ def finalize_batch(shot_ids: list[int], notes: str = ""):
             results.append({"shot_id": shot_id, "status": "blocked", "reasons": item["reasons"]})
             continue
         try:
-            pipeline = finalize_shot(shot_id, notes)
+            pipeline = finalize_shot(shot_id, project_id, notes)
         except ValueError as exc:
             results.append({"shot_id": shot_id, "status": "blocked", "reasons": [str(exc)]})
             continue
