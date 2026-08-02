@@ -12,16 +12,17 @@ A production operating system that turns a complete screenplay into approved, co
 
 ## Current execution order
 
-### 0. Multi-production safety — IN PROGRESS
+### 0. Multi-production safety — DONE
 - **DONE** Project, scene, shot, asset, issue and media-job records are project-aware.
 - **DONE** Project switching and project-scoped list filters.
 - **DONE** Cross-project shot/scene and shot/asset relationship guards.
 - **DONE** Automated two-project end-to-end isolation test (PR #160).
-- **NEXT** Audit remaining write endpoints for common-project ownership checks.
-- **NEXT** Confirm that generation, approvals, continuity and scene assembly never mix project data.
+- **DONE** Continuity issue update endpoint scoped to its owning project (PR #172).
+- **DONE** Approval decision, shot finalize, and all three batch approval/finalize endpoints scoped to their owning project (PR #184).
+- **DONE** Write-endpoint audit: remaining single-ID endpoints (job claim/complete/fail, identity-drift claim/record/evaluate, generation queue/refine) resolve `project_id` server-side from the record itself rather than trusting client input, so they cannot mix project data by construction. Multi-ID endpoints (`shot_id`+asset list, `scene_id`+`asset_id`) already reject cross-project pairs.
 - **BLOCKED** Multi-user or multi-client access requires authentication, authorization and workspace ownership decisions.
 
-**Exit gate:** two independent productions can run in one deployment without reads, writes, jobs, references or approvals crossing project boundaries.
+**Exit gate:** two independent productions can run in one deployment without reads, writes, jobs, references or approvals crossing project boundaries. Met — see Milestone A coverage below.
 
 ### 1. Production foundation — IN PROGRESS
 - **DONE** Full screenplay import flow and scene persistence.
