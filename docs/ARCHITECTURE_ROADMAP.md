@@ -61,35 +61,32 @@ A production operating system that turns a complete screenplay into approved, co
 - **DONE** Image-to-video job creation.
 - **DONE** Polling and completed media-version storage.
 - **DONE** Confirmed bounded retry for failed video jobs.
-- **NEXT** Validate one complete image-to-video flow against the configured production provider.
-- **NEXT** Model selection by shot requirements.
-- **NEXT** Duration, camera-motion and audio controls in the operator workflow.
-- **NEXT** Project-isolation regression coverage for video jobs and results.
+- **DONE** Model selection by shot requirements, with the queue-time estimate and the worker's actual provider request guaranteed consistent (PR #186).
+- **DONE** Duration, camera-motion and audio controls in the operator workflow (job-queue-ui.js) and API (`VideoQueueRequest`).
+- **DONE** Project-isolation regression coverage for video jobs and results (`test_video_job_project_isolation.py`, `test_video_result_ingestion.py`).
+- **NEXT** Validate one complete image-to-video flow against the configured production provider. Requires a live deployment with real provider credentials — cannot be verified from a local/CI checkout.
 
 **Exit gate:** an approved image can produce a stored, reviewable video version through the deployed system without blocking the web request.
 
-### 6. Continuity Director — IN PROGRESS
+### 6. Continuity Director — DONE
 - **DONE** Stored continuity issues and severity levels.
 - **DONE** Critical unresolved issues block final approval.
-- **IN PROGRESS** Shot context and previous-shot comparisons.
-- **NEXT** Compare each shot with both previous and next shots.
-- **NEXT** Strengthen character, wardrobe, prop, lighting, geography and eyeline checks.
-- **NEXT** Add project-isolation and regression tests for continuity results.
+- **DONE** Each shot is compared against both its previous and next shot in the scene (`continuity_preview`).
+- **DONE** Character, wardrobe and prop checks (asset presence/absence diff), lighting/mood/camera/composition/color-palette checks (`TRACKED_FIELDS`), screen-direction (geography) and eyeline-direction checks.
+- **DONE** Project-isolation regression coverage (`test_continuity_preview.py::test_preview_never_uses_neighbors_from_another_project`).
 
-### 7. Scene assembly — IN PROGRESS
+### 7. Scene assembly — DONE
 - **DONE** Shot ordering and duration fields.
-- **DONE** Preview export manifest foundation.
-- **IN PROGRESS** Scene-level assembly data.
-- **NEXT** Validate timeline ordering and duration totals end to end.
-- **NEXT** Audio and dialogue tracking.
-- **NEXT** Export-ready scene manifest containing only approved media.
+- **DONE** Preview export manifest, validated end to end for timeline ordering and duration totals (`test_scene_preview_manifest.py`).
+- **DONE** Audio and dialogue tracking (`audio_notes`/`dialogue`/`has_audio_notes`/`has_dialogue` in the manifest timeline).
+- **DONE** Manifest surfaces only approved media (`_approved_media`) and excludes shots/media from other projects.
 
 ### 8. Production reliability — IN PROGRESS
 - **DONE** Durable media-job table with idempotency keys, attempts and cost fields.
 - **DONE** Retry foundations and automated CI checks.
+- **DONE** Deployment smoke checks for health, screenplay import and video-job polling (`scripts/deployment_smoke.py`).
+- **DONE** Operator-visible cost dashboard: estimated/actual USD, status breakdown and variance from existing read-only endpoints (`cost-tracking-ui.js`).
 - **NEXT** Run long generation and breakdown work in a real separate worker process.
-- **NEXT** Add deployment smoke checks for health, screenplay import and job polling.
-- **NEXT** Complete cost and credit tracking in operator-visible workflows.
 - **BLOCKED** Production database and storage decision: persistent SQLite disk versus Postgres.
 - **BLOCKED** Render topology decision: web service plus separate worker and persistent storage.
 
