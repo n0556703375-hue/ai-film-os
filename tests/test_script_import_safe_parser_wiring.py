@@ -27,19 +27,20 @@ class ScriptImportSafeParserWiringTests(unittest.TestCase):
         self.assertIn("retryable:true", self.html)
 
     def test_retry_copy_is_only_shown_for_retryable_errors(self):
-        self.assertIn("error&&error.retryable", self.html)
+        self.assertIn("error&&error.retryable&&retryState", self.html)
 
-    def test_backend_progress_overrides_browser_local_counts(self):
-        self.assertIn("const backend=error&&error.progress;", self.html)
-        self.assertIn("backend.scenes_created??localProgress.scenesCreated", self.html)
-        self.assertIn("backend.shots_created??localProgress.shotsCreated", self.html)
-        self.assertIn("backend.failed_scene_number||null", self.html)
+    def test_server_progress_updates_current_persisted_counts(self):
+        self.assertIn("progress.scenesCreated=Number(data.scenes_created||scenes.length||0)", self.html)
+        self.assertIn("if(data.idempotent_replay)progress.scenesCreated=scenes.length", self.html)
+        self.assertIn("progress.shotsCreated+=(created.shots||[]).length", self.html)
+        self.assertIn("progress.shotsCreated+=(current.shots||[]).length", self.html)
 
-    def test_partial_failure_summary_renders_persisted_progress(self):
-        self.assertIn("partialFailureSummary(progress,error)", self.html)
-        self.assertIn("סצנות נשמרו", self.html)
-        self.assertIn("שוטים נשמרו", self.html)
-        self.assertIn("השלב שנכשל", self.html)
+    def test_failure_summary_uses_saved_retry_state_without_raw_backend_progress(self):
+        self.assertIn("function failureSummary(error)", self.html)
+        self.assertIn("error&&error.retryable&&retryState", self.html)
+        self.assertIn("לא בוצעה החלפה של נתונים קיימים", self.html)
+        self.assertNotIn("partialFailureSummary", self.html)
+        self.assertNotIn("error.progress", self.html)
 
 
 if __name__ == "__main__":
