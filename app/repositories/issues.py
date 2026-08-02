@@ -159,28 +159,42 @@ def create_issue(data: dict):
     return dict(row)
 
 
-def update_issue(issue_id: int, fields: dict):
+def update_issue(issue_id: int, project_id: int, fields: dict):
     fields = dict(fields)
+    requested_project_id = fields.pop("project_id", project_id)
+    if requested_project_id != project_id:
+        raise ValueError("לא ניתן להעביר בעיית רציפות לפרויקט אחר.")
+
     if "status" in fields:
         fields["resolved"] = int(fields["status"] == "נפתר")
         fields["resolved_at"] = None
+
     with closing(get_connection()) as conn:
+        if not conn.execute(
+            "SELECT 1 FROM projects WHERE id=?", (project_id,)
+        ).fetchone():
+            raise ValueError("הפרויקט שנבחר אינו קיים.")
+
         previous = conn.execute(
-            "SELECT * FROM continuity_issues WHERE id=?", (issue_id,)
+            "SELECT * FROM continuity_issues WHERE id=? AND project_id=?",
+            (issue_id, project_id),
         ).fetchone()
         if not previous:
             return None
 
-        project_id = fields.get("project_id", previous["project_id"])
         shot_id = fields.get("shot_id", previous["shot_id"])
         asset_id = fields.get("asset_id", previous["asset_id"])
         _validate_issue_relationships(conn, project_id, shot_id, asset_id)
 
         sets = ", ".join(f"{key}=?" for key in fields)
         conn.execute(
-            f"UPDATE continuity_issues SET {sets},updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            [*fields.values(), issue_id],
+            f"UPDATE continuity_issues SET {sets},updated_at=CURRENT_TIMESTAMP "
+            "WHERE id=? AND project_id=?",
+            [*fields.values(), issue_id, project_id],
         )
         conn.commit()
-        row = conn.execute("SELECT * FROM continuity_issues WHERE id=?", (issue_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM continuity_issues WHERE id=? AND project_id=?",
+            (issue_id, project_id),
+        ).fetchone()
     return dict(row)
