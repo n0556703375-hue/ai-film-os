@@ -87,7 +87,9 @@ A production operating system that turns a complete screenplay into approved, co
 - **DONE** Deployment smoke checks for health, screenplay import and video-job polling (`scripts/deployment_smoke.py`).
 - **DONE** Operator-visible cost dashboard: estimated/actual USD, status breakdown and variance from existing read-only endpoints (`cost-tracking-ui.js`).
 - **DONE** Explicit fail-closed PostgreSQL activation gate design: a PostgreSQL URL is still rejected unless `ENABLE_POSTGRESQL` is explicitly true; SQLite remains the unchanged default when no URL is configured.
+- **DONE** Production cutover readiness checklist and read-only prerequisite checker (`docs/PRODUCTION_CUTOVER_CHECKLIST.md`, `scripts/production_cutover_check.py`), so the cutover can be executed later with one explicit approval instead of being assembled ad hoc at the time.
 - **NEXT** Run long generation and breakdown work in a real separate worker process.
+- **NEXT** Execute production PostgreSQL cutover after explicit human approval, following `docs/PRODUCTION_CUTOVER_CHECKLIST.md`.
 - **BLOCKED** The real Render activation step remains separate and human-approved: setting `ENABLE_POSTGRESQL` and `DATABASE_URL` in production is not performed by the activation-gate PR and must occur only after the production database is migrated and verified.
 - **BLOCKED** Production database cutover and data movement require an explicitly approved migration run against the real production SQLite source.
 - **BLOCKED** Render topology decision: web service plus separate worker and persistent storage.

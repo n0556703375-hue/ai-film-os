@@ -5,6 +5,12 @@ Read-only checks run by default. A screenplay import requires both
 ``--execute-import`` and ``--screenplay-file``. The harness never requests
 replacement of existing production data and never prints screenplay text,
 credentials, raw HTML, or provider payloads.
+
+The POST-CUTOVER section of docs/PRODUCTION_CUTOVER_CHECKLIST.md runs this
+script (health, screenplay import, project-isolation checks) as part of
+verifying a PostgreSQL cutover. See also scripts/production_cutover_check.py,
+which checks the PRE-CUTOVER prerequisites this script does not cover
+(environment variables, PostgreSQL connectivity, backup presence).
 """
 
 from __future__ import annotations
