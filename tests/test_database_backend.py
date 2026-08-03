@@ -13,21 +13,38 @@ from app.database.backend import (
 
 
 class DatabaseBackendTests(unittest.TestCase):
-    def test_factory_preserves_sqlite_as_default_backend(self):
+    def test_factory_preserves_sqlite_as_default_backend_without_url(self):
         backend = build_database_backend(Path("film_os.db"))
 
         self.assertIsInstance(backend, SQLiteBackend)
         self.assertEqual(backend.name, "sqlite")
         self.assertEqual(backend.database_path, Path("film_os.db"))
 
-    def test_factory_keeps_postgresql_activation_fail_closed(self):
+    def test_factory_keeps_postgresql_activation_fail_closed_when_flag_false(self):
         database_url = "postgresql://user:secret@example.test/film_os"
 
         with self.assertRaisesRegex(RuntimeError, "production activation is not enabled") as error:
-            build_database_backend(Path("film_os.db"), database_url)
+            build_database_backend(
+                Path("film_os.db"),
+                database_url,
+                enable_postgresql=False,
+            )
 
         self.assertNotIn(database_url, str(error.exception))
         self.assertNotIn("secret", str(error.exception))
+
+    def test_factory_builds_postgresql_backend_only_when_flag_true(self):
+        database_url = "postgresql://user:secret@example.test/film_os"
+
+        backend = build_database_backend(
+            Path("film_os.db"),
+            database_url,
+            enable_postgresql=True,
+        )
+
+        self.assertIsInstance(backend, PostgreSQLBackend)
+        self.assertEqual(backend.name, "postgresql")
+        self.assertEqual(backend.database_url, database_url)
 
     def test_factory_rejects_unknown_database_url_scheme(self):
         with self.assertRaisesRegex(ValueError, "Unsupported database URL scheme: mysql"):

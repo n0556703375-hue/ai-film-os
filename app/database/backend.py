@@ -28,12 +28,7 @@ class SQLiteBackend:
 
 @dataclass(frozen=True)
 class PostgreSQLBackend:
-    """Provider adapter for a future PostgreSQL activation.
-
-    The adapter is intentionally not selected by the backend factory yet. This
-    keeps production fail-closed until PostgreSQL-compatible schema migrations
-    and data verification are implemented.
-    """
+    """PostgreSQL runtime adapter selected only behind an explicit gate."""
 
     database_url: str
     name: str = "postgresql"
@@ -63,12 +58,13 @@ class PostgreSQLBackend:
 def build_database_backend(
     database_path: Path,
     database_url: str = "",
+    *,
+    enable_postgresql: bool = False,
 ) -> DatabaseBackend:
     """Build the configured backend while SQLite remains the safe default.
 
-    A configured PostgreSQL URL is recognized but rejected until compatible
-    migrations and verified production cutover tooling are implemented. The URL
-    is never included in the error message, preventing credential exposure.
+    PostgreSQL remains fail-closed unless both a PostgreSQL URL and the explicit
+    activation flag are present. The URL is never included in error messages.
     """
 
     normalized_url = database_url.strip()
@@ -77,8 +73,10 @@ def build_database_backend(
 
     scheme = urlparse(normalized_url).scheme.lower()
     if scheme in {"postgres", "postgresql"}:
-        raise RuntimeError(
-            "PostgreSQL is configured but production activation is not enabled yet."
-        )
+        if not enable_postgresql:
+            raise RuntimeError(
+                "PostgreSQL is configured but production activation is not enabled yet."
+            )
+        return PostgreSQLBackend(normalized_url)
 
     raise ValueError(f"Unsupported database URL scheme: {scheme or '<missing>'}.")

@@ -6,12 +6,14 @@ from app.database.backend import build_database_backend
 from app.database.schema import SCHEMA_SQL
 from app.database.seed import seed_database
 from app.database.startup import build_database_startup_adapter
+from app.database.validate_postgres_schema import validate_postgres_startup_connection
 
 
 def get_database_backend():
     return build_database_backend(
         settings.database_path,
         settings.database_url,
+        enable_postgresql=settings.enable_postgresql,
     )
 
 
@@ -97,6 +99,8 @@ def init_db() -> None:
         schema_sql=SCHEMA_SQL,
         migrate=migrate_database,
         seed=seed_database,
+        enable_postgresql=settings.enable_postgresql,
+        validate_postgresql=validate_postgres_startup_connection,
     )
     with closing(backend.connect()) as conn:
         startup.initialize(conn)
