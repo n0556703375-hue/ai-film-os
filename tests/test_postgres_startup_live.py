@@ -2,6 +2,7 @@ import os
 import unittest
 from unittest.mock import Mock
 
+from app.database.postgres_schema import POSTGRES_SCHEMA_SQL
 from app.database.startup import build_database_startup_adapter
 from app.database.validate_postgres_schema import validate_postgres_startup_connection
 
@@ -11,6 +12,20 @@ from app.database.validate_postgres_schema import validate_postgres_startup_conn
     "requires POSTGRES_TEST_DATABASE_URL for an isolated PostgreSQL test service",
 )
 class PostgreSQLStartupLiveTests(unittest.TestCase):
+    def setUp(self):
+        import psycopg
+
+        database_url = os.environ["POSTGRES_TEST_DATABASE_URL"]
+        # Apply the schema directly so this test is self-contained and passes
+        # regardless of what other live-database tests ran before it, rather
+        # than silently depending on some other process having populated it.
+        with psycopg.connect(database_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("DROP SCHEMA public CASCADE")
+                cursor.execute("CREATE SCHEMA public")
+                cursor.execute(POSTGRES_SCHEMA_SQL)
+            connection.commit()
+
     def test_gated_startup_uses_real_read_only_schema_validation(self):
         import psycopg
 

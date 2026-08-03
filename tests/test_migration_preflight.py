@@ -92,7 +92,7 @@ class MigrationPreflightTests(unittest.TestCase):
         self.assertEqual(result["foreign_key_violations"], 1)
 
     def test_contract_table_parser_matches_postgres_schema(self):
-        self.assertEqual(len(EXPECTED_TABLES), 11)
+        self.assertEqual(len(EXPECTED_TABLES), 12)
         for table in EXPECTED_TABLES:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", POSTGRES_SCHEMA_SQL)
 

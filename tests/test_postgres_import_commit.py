@@ -9,7 +9,7 @@ from app.database.postgres_import_commit import (
     CONFIRMATION_PHRASE,
     import_sqlite_to_postgres,
 )
-from app.database.postgres_import_dry_run import TABLE_ORDER
+from app.database.postgres_import_dry_run import TABLE_ORDER, TABLES_WITH_SERIAL_ID
 
 
 class FakePostgresCursor:
@@ -19,11 +19,17 @@ class FakePostgresCursor:
         self._row = None
         self._rows = []
         self.constraints_checked = False
+        self.setval_calls: list[str] = []
 
     def execute(self, statement, params=None):
         normalized = statement.strip()
         if normalized.startswith("SELECT tablename FROM pg_catalog.pg_tables"):
             self._rows = [(table,) for table in self.existing_tables]
+        elif normalized.startswith("SELECT setval("):
+            match = re.search(r"pg_get_serial_sequence\('([a-z_]+)'", normalized)
+            if not match:
+                raise AssertionError(f"Unexpected setval statement: {statement}")
+            self.setval_calls.append(match.group(1))
         else:
             count_match = re.fullmatch(
                 r'SELECT COUNT\(\*\) FROM "([A-Za-z_][A-Za-z0-9_]*)"',
@@ -120,6 +126,11 @@ class PersistentPostgresImportTests(unittest.TestCase):
         self.assertTrue(result["committed"])
         self.assertFalse(result["production_configuration_changed"])
         self.assertEqual(result["row_counts"]["projects"], 1)
+        self.assertTrue(result["sequences_realigned"])
+        self.assertEqual(
+            set(target.cursor_instance.setval_calls), set(TABLES_WITH_SERIAL_ID)
+        )
+        self.assertNotIn("shot_assets", target.cursor_instance.setval_calls)
         self.assertEqual(target.commit_calls, 1)
         self.assertEqual(target.rollback_calls, 0)
         self.assertEqual(target.close_calls, 1)
@@ -189,6 +200,7 @@ class PersistentPostgresImportTests(unittest.TestCase):
         self.assertEqual(target.commit_calls, 0)
         self.assertEqual(target.rollback_calls, 1)
         self.assertEqual(target.close_calls, 1)
+        self.assertEqual(target.cursor_instance.setval_calls, [])
 
     def test_invalid_url_does_not_echo_credentials(self):
         secret_url = "sqlite://user:super-secret@host/database"

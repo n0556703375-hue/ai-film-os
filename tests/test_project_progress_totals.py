@@ -67,6 +67,39 @@ class ProjectProgressTotalsTests(unittest.TestCase):
             [call(connection, unittest.mock.ANY), call(connection, unittest.mock.ANY)],
         )
 
+    @patch("app.repositories.projects.execute_query")
+    @patch("app.repositories.projects.get_connection")
+    def test_create_and_update_use_cross_backend_query_adapter(
+        self, get_connection, execute_query
+    ):
+        """create_project/update_project previously used raw conn.execute(...)
+        with sqlite-only "?" placeholders and cursor.lastrowid, which does not
+        exist on psycopg cursors. They must go through execute_query with a
+        RETURNING clause instead, like every other write path in this module."""
+        connection = Mock()
+        get_connection.return_value = connection
+        execute_query.return_value = Mock(
+            fetchone=Mock(return_value={"id": 9, "name": "Film"})
+        )
+
+        created = projects.create_project({"name": "Film"})
+
+        self.assertEqual(created, {"id": 9, "name": "Film"})
+        sql = execute_query.call_args_list[0].args[1]
+        self.assertIn("RETURNING *", sql)
+        self.assertNotIn("lastrowid", sql)
+
+        execute_query.reset_mock()
+        execute_query.side_effect = [
+            Mock(fetchone=Mock(return_value={"id": 9})),
+            Mock(fetchone=Mock(return_value={"id": 9, "name": "Updated"})),
+        ]
+
+        updated = projects.update_project(9, {"name": "Updated"})
+
+        self.assertEqual(updated, {"id": 9, "name": "Updated"})
+        self.assertIn("RETURNING *", execute_query.call_args_list[1].args[1])
+
 
 if __name__ == "__main__":
     unittest.main()
