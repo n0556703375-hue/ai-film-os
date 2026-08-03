@@ -168,7 +168,12 @@ def _run_resumable_import(
         )
         if not isinstance(created, dict):
             raise SmokeFailure("Shot-map generation returned an invalid shape")
-        shots_created += len(created.get("shots") or [])
+        created_shots = list(created.get("shots") or [])
+        if any(int(shot.get("project_id") or 0) != config.project_id for shot in created_shots):
+            raise SmokeFailure("Shot-map generation returned a shot from another project")
+        if any(int(shot.get("scene_id") or 0) != scene_id for shot in created_shots):
+            raise SmokeFailure("Shot-map generation returned a shot from another scene")
+        shots_created += len(created_shots)
 
     return {
         "processed_chunks": int(state["next_chunk_index"]),
