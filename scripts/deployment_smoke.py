@@ -152,6 +152,8 @@ def _run_resumable_import(
         scene_id = int(scene.get("id") or 0)
         if scene_id < 1:
             raise SmokeFailure("Persisted screenplay scene is missing an id")
+        if int(scene.get("project_id") or 0) != config.project_id:
+            raise SmokeFailure("Screenplay persistence returned a scene from another project")
         if scene_id in existing_shot_scene_ids:
             shot_maps_skipped += 1
             continue
