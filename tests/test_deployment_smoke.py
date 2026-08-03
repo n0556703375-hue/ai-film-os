@@ -144,7 +144,12 @@ class DeploymentSmokeTests(unittest.TestCase):
                         {"id": 11, "project_id": 7, "scene_number": 1, "title": "פתיחה", "recommended_shot_count": 2}
                     ],
                 },
-                {"shots": [{"id": 21, "project_id": 7}, {"id": 22, "project_id": 7}]},
+                {
+                    "shots": [
+                        {"id": 21, "project_id": 7, "scene_id": 11},
+                        {"id": 22, "project_id": 7, "scene_id": 11},
+                    ]
+                },
                 {
                     "project": {"id": 7},
                     "scenes": [{"id": 11, "project_id": 7}],
