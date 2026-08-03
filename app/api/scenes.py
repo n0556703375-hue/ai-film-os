@@ -40,8 +40,20 @@ def create_scene(scene: SceneCreate):
         raise HTTPException(400, str(exc))
 
 
-@router.post("/import-script")
+@router.post(
+    "/import-script",
+    deprecated=True,
+    include_in_schema=False,
+)
 def import_script(request: ScriptImportRequest):
+    """Legacy single-request import, superseded by the resumable /api/import-runs flow.
+
+    Not called by the current UI (app/templates/script_import.html) or by
+    scripts/deployment_smoke.py, and excluded from the OpenAPI schema so it can't
+    be mistaken for the documented import entry point. Kept only because
+    tests/test_script_import_counts.py still exercises this function directly;
+    do not wire any new client to this path.
+    """
     project = project_repo.get_project(request.project_id)
     if not project:
         raise HTTPException(404, "הפרויקט לא נמצא.")
@@ -153,7 +165,16 @@ def update_scene(scene_id: int, update: SceneUpdate):
     return scene
 
 
-@router.post("/{scene_id}/shot-map")
+@router.post(
+    "/{scene_id}/shot-map",
+    summary="Generate the shot map for one scene (final step of a screenplay import)",
+    description=(
+        "Called once per scene after POST /api/import-runs/persist, for every "
+        "scene that does not already have shots. Refuses to run when the scene "
+        "already has shots unless `replace_existing` is explicitly set, so a "
+        "retried import never overwrites an existing shot map."
+    ),
+)
 def create_shot_map(scene_id: int, request: ShotMapRequest):
     scene = repo.get_scene(scene_id)
     if not scene:

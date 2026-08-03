@@ -40,7 +40,22 @@ def _scene_signature(scene: dict[str, Any]) -> tuple[int, str]:
     return scene_number, title
 
 
-@router.post("/process-next")
+@router.post(
+    "/process-next",
+    summary="Start or resume a screenplay import (the production entry point)",
+    description=(
+        "This is the entry point for importing a screenplay: there is no separate "
+        "\"start import\" endpoint. Call it first with `next_chunk_index` at its "
+        "default of 0 and the full `screenplay` text — that call both starts the "
+        "run and processes the first bounded chunk. Each response returns "
+        "`screenplay_fingerprint`, `next_chunk_index`, `scenes`, and `completed`; "
+        "feed those back into the next call unchanged until `completed` is true. "
+        "The endpoint is project-scoped (`project_id`), never persists data, and "
+        "is safe to retry — resuming with a changed screenplay is rejected (409) "
+        "so a stale retry can never silently overwrite progress. Once `completed` "
+        "is true, call POST /api/import-runs/persist with the accumulated `scenes`."
+    ),
+)
 def process_next_import_chunk(request: ImportRunStepRequest):
     project = project_repo.get_project(request.project_id)
     if not project:
@@ -90,7 +105,19 @@ def process_next_import_chunk(request: ImportRunStepRequest):
     return payload
 
 
-@router.post("/persist")
+@router.post(
+    "/persist",
+    summary="Persist a completed screenplay breakdown (call only after process-next reports completed)",
+    description=(
+        "Writes the scenes accumulated by repeated POST /api/import-runs/process-next "
+        "calls once that endpoint reports `completed: true`. Project-scoped and "
+        "non-destructive: if the project already has scenes, this call only "
+        "succeeds when they exactly match the requested breakdown, in which case "
+        "it returns `idempotent_replay: true` and creates nothing — it never "
+        "replaces or deletes existing scenes. Calling this twice with the same "
+        "breakdown is therefore safe and does not increase scene counts."
+    ),
+)
 def persist_completed_import(request: ImportRunPersistRequest):
     if not project_repo.get_project(request.project_id):
         raise HTTPException(404, "הפרויקט לא נמצא.")
