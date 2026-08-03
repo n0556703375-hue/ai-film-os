@@ -85,13 +85,13 @@ class DeploymentSmokeTests(unittest.TestCase):
                 "project": {"id": 7},
                 "scenes": [{"id": 1, "project_id": 8}],
                 "shots": [],
-            })
+            }, expected_project_id=7)
         with self.assertRaisesRegex(SmokeFailure, "shot from another project"):
             _snapshot_counts({
                 "project": {"id": 7},
                 "scenes": [],
                 "shots": [{"id": 2, "project_id": 8}],
-            })
+            }, expected_project_id=7)
 
     def test_snapshot_rejects_invalid_shot_scene_relationship(self):
         with self.assertRaisesRegex(SmokeFailure, "invalid scene relationship"):
@@ -144,7 +144,12 @@ class DeploymentSmokeTests(unittest.TestCase):
                         {"id": 11, "project_id": 7, "scene_number": 1, "title": "פתיחה", "recommended_shot_count": 2}
                     ],
                 },
-                {"shots": [{"id": 21, "project_id": 7}, {"id": 22, "project_id": 7}]},
+                {
+                    "shots": [
+                        {"id": 21, "project_id": 7, "scene_id": 11},
+                        {"id": 22, "project_id": 7, "scene_id": 11},
+                    ]
+                },
                 {
                     "project": {"id": 7},
                     "scenes": [{"id": 11, "project_id": 7}],
