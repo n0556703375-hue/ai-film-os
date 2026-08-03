@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS scenes (
     beginning TEXT NOT NULL DEFAULT '',
     ending TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'מתוכנן',
+    updated_at TEXT NOT NULL DEFAULT '',
     FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
@@ -46,6 +48,13 @@ CREATE TABLE IF NOT EXISTS shots (
     movement TEXT NOT NULL DEFAULT '',
     mood TEXT NOT NULL DEFAULT '',
     dialogue TEXT NOT NULL DEFAULT '',
+    duration_seconds DOUBLE PRECISION,
+    camera_angle TEXT NOT NULL DEFAULT '',
+    composition TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL DEFAULT '',
+    color_palette TEXT NOT NULL DEFAULT '',
+    audio TEXT NOT NULL DEFAULT '',
+    negative_prompt TEXT NOT NULL DEFAULT '',
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
     FOREIGN KEY(scene_id) REFERENCES scenes(id) ON DELETE SET NULL
@@ -103,6 +112,11 @@ CREATE TABLE IF NOT EXISTS continuity_issues (
     resolved INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     resolved_at TIMESTAMPTZ,
+    status TEXT NOT NULL DEFAULT 'פתוח',
+    expected TEXT NOT NULL DEFAULT '',
+    observed TEXT NOT NULL DEFAULT '',
+    resolution TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
     FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
     FOREIGN KEY(shot_id) REFERENCES shots(id) ON DELETE CASCADE,
     FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE SET NULL
@@ -114,6 +128,8 @@ CREATE TABLE IF NOT EXISTS prompt_versions (
     version INTEGER NOT NULL,
     prompt TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    negative_prompt TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'manual',
     FOREIGN KEY(shot_id) REFERENCES shots(id) ON DELETE CASCADE
 );
 
@@ -170,5 +186,19 @@ CREATE TABLE IF NOT EXISTS media_jobs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
     FOREIGN KEY(shot_id) REFERENCES shots(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS scene_asset_variants (
+    id BIGSERIAL PRIMARY KEY,
+    scene_id BIGINT NOT NULL,
+    asset_id BIGINT NOT NULL,
+    state_name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    reference_url TEXT NOT NULL DEFAULT '',
+    visual_rules TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(scene_id, asset_id),
+    FOREIGN KEY(scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
+    FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 """

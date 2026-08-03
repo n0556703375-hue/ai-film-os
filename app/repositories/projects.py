@@ -52,27 +52,33 @@ def get_project(project_id: int):
 
 def create_project(data: dict):
     with closing(get_connection()) as conn:
-        cur = conn.execute("""
+        row = execute_query(
+            conn,
+            """
             INSERT INTO projects (name,description,visual_style,rules)
             VALUES (?,?,?,?)
-        """, (
-            data["name"], data.get("description", ""),
-            data.get("visual_style", ""), data.get("rules", ""),
-        ))
+            RETURNING *
+            """,
+            (
+                data["name"], data.get("description", ""),
+                data.get("visual_style", ""), data.get("rules", ""),
+            ),
+        ).fetchone()
         conn.commit()
-        row = conn.execute("SELECT * FROM projects WHERE id=?", (cur.lastrowid,)).fetchone()
     return dict(row)
 
 
 def update_project(project_id: int, fields: dict):
     with closing(get_connection()) as conn:
-        if not conn.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+        if not execute_query(
+            conn, "SELECT 1 FROM projects WHERE id=?", (project_id,)
+        ).fetchone():
             return None
         sets = ", ".join(f"{k}=?" for k in fields)
-        conn.execute(
-            f"UPDATE projects SET {sets},updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            [*fields.values(), project_id]
-        )
+        row = execute_query(
+            conn,
+            f"UPDATE projects SET {sets},updated_at=CURRENT_TIMESTAMP WHERE id=? RETURNING *",
+            [*fields.values(), project_id],
+        ).fetchone()
         conn.commit()
-        row = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
     return dict(row)

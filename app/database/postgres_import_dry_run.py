@@ -27,12 +27,19 @@ TABLE_ORDER = (
     "assets",
     "shot_assets",
     "asset_reference_images",
+    "scene_asset_variants",
     "continuity_issues",
     "prompt_versions",
     "media_results",
     "approval_events",
     "media_jobs",
 )
+
+# Every migrated table except shot_assets (composite primary key, no serial
+# "id" column) uses a BIGSERIAL id. Explicit-id inserts during import never
+# advance a PostgreSQL sequence, so these are the tables whose sequence must
+# be realigned after a persistent import commits.
+TABLES_WITH_SERIAL_ID = tuple(table for table in TABLE_ORDER if table != "shot_assets")
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 

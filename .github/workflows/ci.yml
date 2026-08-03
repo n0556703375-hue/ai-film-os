@@ -30,6 +30,9 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Seed a diagnostic test-output placeholder
+        run: |
+          echo "CI did not reach the test step; check the failing step above this artifact." > test-output.log
       - name: Compile application
         run: python -m compileall -q app
       - name: Validate PostgreSQL schema rollback path
@@ -50,14 +53,24 @@ jobs:
           import sqlite3
           from pathlib import Path
 
-          from app.database.schema import SCHEMA_SQL
+          from app.core.config import settings
+          from app.database.connection import init_db
 
           source_path = Path(os.environ["FILM_OS_DB"])
           backup_path = Path(os.environ["FILM_OS_BACKUP_DB"])
 
+          # Build the source through the real runtime init/migration path
+          # (SCHEMA_SQL + migrate_database + seed_database), not just the
+          # static SCHEMA_SQL constant, so the fixture always has the same
+          # effective schema the application actually runs with.
+          original_path = settings.database_path
+          try:
+              settings.database_path = source_path
+              init_db()
+          finally:
+              settings.database_path = original_path
+
           with sqlite3.connect(source_path) as source:
-              source.executescript(SCHEMA_SQL)
-              source.commit()
               with sqlite3.connect(backup_path) as backup:
                   source.backup(backup)
           PY
@@ -76,14 +89,33 @@ jobs:
           import sqlite3
           from pathlib import Path
 
-          from app.database.schema import SCHEMA_SQL
+          from app.core.config import settings
+          from app.database.connection import init_db
+          from app.database.migration_preflight import EXPECTED_TABLES
 
           source_path = Path(os.environ["FILM_OS_DB"])
           backup_path = Path(os.environ["FILM_OS_BACKUP_DB"])
 
+          # Build the source through the real runtime init/migration path so
+          # the effective 12-table schema (including scene_asset_variants and
+          # every migrate_database column) exists before the fixture data
+          # goes in, exactly like the application does on first boot.
+          original_path = settings.database_path
+          try:
+              settings.database_path = source_path
+              init_db()
+          finally:
+              settings.database_path = original_path
+
           with sqlite3.connect(source_path) as source:
+              source.execute("PRAGMA foreign_keys = OFF")
+              # init_db() seeds baseline demo data when the projects table is
+              # empty. Clear it so the fixture keeps its exact, deterministic
+              # explicit-id row counts instead of drifting with seed content.
+              for table in EXPECTED_TABLES:
+                  source.execute(f'DELETE FROM "{table}"')
+              source.commit()
               source.execute("PRAGMA foreign_keys = ON")
-              source.executescript(SCHEMA_SQL)
               source.execute(
                   "INSERT INTO projects (id, name, description, visual_style, rules) "
                   "VALUES (?, ?, ?, ?, ?)",
@@ -143,12 +175,22 @@ jobs:
               "assets": 1,
               "shot_assets": 1,
               "asset_reference_images": 0,
+              "scene_asset_variants": 0,
               "continuity_issues": 0,
               "prompt_versions": 1,
               "media_results": 1,
               "approval_events": 1,
               "media_jobs": 0,
           }
+
+          # Guard against this fixture silently falling behind the real
+          # migration contract again: fail loudly instead of skipping tables.
+          if set(expected_counts) != set(TABLE_ORDER):
+              raise SystemExit(
+                  "CI fixture expected_counts is out of sync with TABLE_ORDER: "
+                  f"missing={set(TABLE_ORDER) - set(expected_counts)} "
+                  f"extra={set(expected_counts) - set(TABLE_ORDER)}"
+              )
 
           with psycopg.connect(os.environ["POSTGRES_IMPORT_URL"]) as connection:
               with connection.cursor() as cursor:
@@ -192,6 +234,8 @@ jobs:
           PY
       - name: Run tests
         id: tests
+        env:
+          POSTGRES_TEST_DATABASE_URL: postgresql://film_os_ci:film_os_ci_password@localhost:5432/film_os_validation
         shell: bash
         continue-on-error: true
         run: |
@@ -203,7 +247,7 @@ jobs:
         with:
           name: test-output
           path: test-output.log
-          if-no-files-found: error
+          if-no-files-found: warn
       - name: Fail when tests fail
         if: steps.tests.outputs.exit_code != '0'
         run: |

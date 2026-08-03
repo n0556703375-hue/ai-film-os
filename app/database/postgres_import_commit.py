@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 from app.database.postgres_import_dry_run import (
     TABLE_ORDER,
+    TABLES_WITH_SERIAL_ID,
     _quote_identifier,
     _validate_contract,
 )
@@ -27,6 +28,28 @@ from app.database.postgres_schema import POSTGRES_SCHEMA_SQL
 from app.database.sqlite_backup_verification import verify_sqlite_backup
 
 CONFIRMATION_PHRASE = "IMPORT_TO_EMPTY_POSTGRES"
+
+
+def _realign_serial_sequences(cursor: Any) -> None:
+    """Advance every imported table's id sequence past its imported max id.
+
+    Import inserts explicit id values, so PostgreSQL never advances the
+    underlying BIGSERIAL sequence on its own. Left unaligned, the first
+    application insert after cutover would try to reuse an id already taken
+    by imported data and fail (or, if the low ids happen to be free again
+    after deletes, silently collide). This realignment is intentionally
+    outside the dry-run path: sequence state is not transactional in
+    PostgreSQL, so running it there would leak state through a rollback.
+    """
+    for table in TABLES_WITH_SERIAL_ID:
+        quoted_table = _quote_identifier(table)
+        cursor.execute(
+            f"SELECT setval("
+            f"pg_get_serial_sequence('{table}', 'id'), "
+            f"COALESCE((SELECT MAX(id) FROM {quoted_table}), 1), "
+            f"(SELECT MAX(id) FROM {quoted_table}) IS NOT NULL"
+            f")"
+        )
 
 
 def _default_postgres_connect(database_url: str) -> Any:
@@ -120,6 +143,7 @@ def import_sqlite_to_postgres(
         if target_counts != expected_counts or target_counts != transferred:
             raise RuntimeError("Committed PostgreSQL row counts do not match the source.")
 
+        _realign_serial_sequences(cursor)
         target.commit()
         committed = True
         return {
@@ -129,6 +153,7 @@ def import_sqlite_to_postgres(
             "constraints_validated": True,
             "backup_verified": True,
             "committed": True,
+            "sequences_realigned": True,
             "production_configuration_changed": False,
         }
     except RuntimeError:
