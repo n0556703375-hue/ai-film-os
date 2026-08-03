@@ -54,7 +54,7 @@ class DeploymentSmokeShotMapGuardTests(unittest.TestCase):
                 },
             ]
 
-            with self.assertRaisesRegex(SmokeFailure, "shot-map.*another project"):
+            with self.assertRaisesRegex(SmokeFailure, "Shot-map.*another project"):
                 run_smoke(
                     SmokeConfig(
                         base_url="https://example.invalid",
