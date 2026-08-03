@@ -4,11 +4,19 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class Settings:
     app_name = "AI Film OS"
     project_name = os.getenv("FILM_PROJECT_NAME", "כתובת אפס")
     database_path = Path(os.getenv("FILM_OS_DB", BASE_DIR / "film_os.db"))
     database_url = os.getenv("DATABASE_URL", "").strip()
+    enable_postgresql = _env_flag("ENABLE_POSTGRESQL", False)
     openai_api_key = os.getenv("OPENAI_API_KEY", "")
     openai_text_model = os.getenv("OPENAI_TEXT_MODEL", "gpt-5-mini")
     openai_vision_model = os.getenv("OPENAI_VISION_MODEL", "gpt-5.6-luna")
