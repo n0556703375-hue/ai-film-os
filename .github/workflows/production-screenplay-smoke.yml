@@ -1,0 +1,88 @@
+name: Production Screenplay Import Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: Existing isolated Render project ID for the smoke import
+        required: true
+        type: number
+      confirmation:
+        description: Type RUN_PRODUCTION_IMPORT_SMOKE to allow the import
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-screenplay-import-smoke
+  cancel-in-progress: false
+
+jobs:
+  verify-import-idempotency:
+    if: ${{ inputs.confirmation == 'RUN_PRODUCTION_IMPORT_SMOKE' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Materialize screenplay without logging it
+        env:
+          SCREENPLAY_B64: ${{ secrets.PRODUCTION_SMOKE_SCREENPLAY_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${SCREENPLAY_B64:-}" ]; then
+            echo "Missing required repository secret: PRODUCTION_SMOKE_SCREENPLAY_B64" >&2
+            exit 1
+          fi
+          umask 077
+          python - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          encoded = os.environ["SCREENPLAY_B64"]
+          try:
+              screenplay = base64.b64decode(encoded, validate=True)
+          except Exception as exc:
+              raise SystemExit(f"PRODUCTION_SMOKE_SCREENPLAY_B64 is not valid base64: {exc}")
+          if not screenplay.strip():
+              raise SystemExit("Decoded screenplay is empty")
+          Path("production-smoke-screenplay.txt").write_bytes(screenplay)
+          PY
+
+      - name: Verify deployed import idempotency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/deployment_import_idempotency.py \
+            --base-url https://ai-film-os.onrender.com \
+            --project-id "${{ inputs.project_id }}" \
+            --screenplay-file production-smoke-screenplay.txt \
+            --execute-import \
+            --timeout-seconds 60 \
+            | tee production-smoke-result.json
+
+      - name: Remove screenplay material
+        if: always()
+        shell: bash
+        run: rm -f production-smoke-screenplay.txt
+
+      - name: Upload count-only result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-screenplay-smoke-result
+          path: production-smoke-result.json
+          if-no-files-found: warn
+          retention-days: 7
