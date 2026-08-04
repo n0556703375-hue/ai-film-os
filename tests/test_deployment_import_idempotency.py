@@ -95,6 +95,8 @@ class DeploymentImportIdempotencyTests(unittest.TestCase):
             run_smoke.side_effect = [
                 {
                     "import_executed": True,
+                    "scenes_created": 2,
+                    "shots_created": 6,
                     "after": {"scenes": 2, "shots": 6},
                 },
                 {
@@ -119,6 +121,8 @@ class DeploymentImportIdempotencyTests(unittest.TestCase):
             run_smoke.side_effect = [
                 {
                     "import_executed": True,
+                    "scenes_created": 2,
+                    "shots_created": 6,
                     "after": {"scenes": 2, "shots": 6},
                 },
                 {

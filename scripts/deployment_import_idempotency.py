@@ -3,8 +3,9 @@
 
 The command deliberately runs the existing safe deployment import smoke twice
 against the same empty, isolated project and screenplay. It succeeds only when
-the second run is reported as an idempotent replay, creates no new shot maps,
-and leaves scene and shot totals unchanged.
+the first run creates persisted scenes and shots, the second run is reported as
+an idempotent replay, creates no new shot maps, and leaves scene and shot totals
+unchanged.
 """
 
 from __future__ import annotations
@@ -50,16 +51,24 @@ def verify_import_idempotency(config: SmokeConfig) -> dict[str, object]:
 
     if not first.get("import_executed") or not second.get("import_executed"):
         raise SmokeFailure("Both deployment smoke runs must execute the screenplay import")
-    if not second.get("idempotent_replay"):
-        raise SmokeFailure("Second screenplay import was not reported as an idempotent replay")
-    if int(second.get("shots_created") or 0) != 0:
-        raise SmokeFailure("Second screenplay import created new shots")
 
     first_after = first.get("after")
     second_before = second.get("before")
     second_after = second.get("after")
     if not isinstance(first_after, dict) or not isinstance(second_before, dict) or not isinstance(second_after, dict):
         raise SmokeFailure("Deployment smoke results are missing production count snapshots")
+
+    first_scenes_created = int(first.get("scenes_created") or 0)
+    first_shots_created = int(first.get("shots_created") or 0)
+    if first_scenes_created < 1 or first_shots_created < 1:
+        raise SmokeFailure("First screenplay import did not create both scenes and shots")
+    if int(first_after.get("scenes") or 0) < 1 or int(first_after.get("shots") or 0) < 1:
+        raise SmokeFailure("First screenplay import left no persisted scenes or shots")
+
+    if not second.get("idempotent_replay"):
+        raise SmokeFailure("Second screenplay import was not reported as an idempotent replay")
+    if int(second.get("shots_created") or 0) != 0:
+        raise SmokeFailure("Second screenplay import created new shots")
     if first_after != second_before or second_before != second_after:
         raise SmokeFailure("Scene or shot totals changed during the idempotent replay")
 
@@ -68,8 +77,8 @@ def verify_import_idempotency(config: SmokeConfig) -> dict[str, object]:
         "idempotent_replay": True,
         "counts": second_after,
         "first": {
-            "scenes_created": int(first.get("scenes_created") or 0),
-            "shots_created": int(first.get("shots_created") or 0),
+            "scenes_created": first_scenes_created,
+            "shots_created": first_shots_created,
         },
         "second": {
             "scenes_created": int(second.get("scenes_created") or 0),
