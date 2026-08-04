@@ -35,6 +35,28 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Validate project input and deployed health
+        shell: bash
+        env:
+          PROJECT_ID: ${{ inputs.project_id }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+
+          raw = os.environ.get("PROJECT_ID", "")
+          try:
+              project_id = int(raw)
+          except ValueError:
+              raise SystemExit("project_id must be an integer")
+          if project_id <= 0:
+              raise SystemExit("project_id must be a positive existing project ID")
+          PY
+          curl --fail --silent --show-error \
+            --retry 5 --retry-all-errors --retry-delay 3 \
+            --max-time 30 \
+            https://ai-film-os.onrender.com/health >/dev/null
+
       - name: Materialize screenplay without logging it
         env:
           SCREENPLAY_B64: ${{ secrets.PRODUCTION_SMOKE_SCREENPLAY_B64 }}
