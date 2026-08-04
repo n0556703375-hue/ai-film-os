@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.deployment_import_idempotency import verify_import_idempotency
+from scripts.deployment_import_idempotency import verify_empty_project, verify_import_idempotency
 from scripts.deployment_smoke import SmokeConfig, SmokeFailure
 
 
@@ -23,8 +23,37 @@ class DeploymentImportIdempotencyTests(unittest.TestCase):
             with self.assertRaisesRegex(SmokeFailure, "--execute-import"):
                 verify_import_idempotency(self._config(screenplay, execute_import=False))
 
+    @patch("scripts.deployment_import_idempotency._request_json")
+    def test_empty_project_preflight_accepts_zero_counts(self, request_json):
+        request_json.return_value = {
+            "project": {"id": 7},
+            "scenes": [],
+            "shots": [],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            screenplay = Path(directory) / "screenplay.txt"
+            screenplay.write_text("א" * 80, encoding="utf-8")
+            counts = verify_empty_project(self._config(screenplay))
+
+        self.assertEqual(counts, {"scenes": 0, "shots": 0})
+
+    @patch("scripts.deployment_import_idempotency._request_json")
+    def test_empty_project_preflight_rejects_existing_data_before_import(self, request_json):
+        request_json.return_value = {
+            "project": {"id": 7},
+            "scenes": [{"id": 1, "project_id": 7}],
+            "shots": [],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            screenplay = Path(directory) / "screenplay.txt"
+            screenplay.write_text("א" * 80, encoding="utf-8")
+            with self.assertRaisesRegex(SmokeFailure, "requires an empty isolated project"):
+                verify_empty_project(self._config(screenplay))
+
+    @patch("scripts.deployment_import_idempotency.verify_empty_project")
     @patch("scripts.deployment_import_idempotency.run_smoke")
-    def test_accepts_unchanged_idempotent_replay(self, run_smoke):
+    def test_accepts_unchanged_idempotent_replay(self, run_smoke, verify_empty_project):
+        verify_empty_project.return_value = {"scenes": 0, "shots": 0}
         with tempfile.TemporaryDirectory() as directory:
             screenplay = Path(directory) / "screenplay.txt"
             screenplay.write_text("א" * 80, encoding="utf-8")
@@ -54,9 +83,12 @@ class DeploymentImportIdempotencyTests(unittest.TestCase):
         self.assertEqual(result["counts"], {"scenes": 2, "shots": 6})
         self.assertEqual(result["second"]["shots_created"], 0)
         self.assertEqual(run_smoke.call_count, 2)
+        verify_empty_project.assert_called_once()
 
+    @patch("scripts.deployment_import_idempotency.verify_empty_project")
     @patch("scripts.deployment_import_idempotency.run_smoke")
-    def test_rejects_second_run_that_is_not_idempotent(self, run_smoke):
+    def test_rejects_second_run_that_is_not_idempotent(self, run_smoke, verify_empty_project):
+        verify_empty_project.return_value = {"scenes": 0, "shots": 0}
         with tempfile.TemporaryDirectory() as directory:
             screenplay = Path(directory) / "screenplay.txt"
             screenplay.write_text("א" * 80, encoding="utf-8")
@@ -77,8 +109,10 @@ class DeploymentImportIdempotencyTests(unittest.TestCase):
             with self.assertRaisesRegex(SmokeFailure, "not reported as an idempotent replay"):
                 verify_import_idempotency(self._config(screenplay))
 
+    @patch("scripts.deployment_import_idempotency.verify_empty_project")
     @patch("scripts.deployment_import_idempotency.run_smoke")
-    def test_rejects_count_growth_during_replay(self, run_smoke):
+    def test_rejects_count_growth_during_replay(self, run_smoke, verify_empty_project):
+        verify_empty_project.return_value = {"scenes": 0, "shots": 0}
         with tempfile.TemporaryDirectory() as directory:
             screenplay = Path(directory) / "screenplay.txt"
             screenplay.write_text("א" * 80, encoding="utf-8")
