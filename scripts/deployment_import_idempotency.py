@@ -2,9 +2,9 @@
 """Verify deployed screenplay import idempotency without replacing data.
 
 The command deliberately runs the existing safe deployment import smoke twice
-against the same project and screenplay. It succeeds only when the second run
-is reported as an idempotent replay, creates no new shot maps, and leaves scene
-and shot totals unchanged.
+against the same empty, isolated project and screenplay. It succeeds only when
+the second run is reported as an idempotent replay, creates no new shot maps,
+and leaves scene and shot totals unchanged.
 """
 
 from __future__ import annotations
@@ -14,7 +14,28 @@ import json
 import sys
 from pathlib import Path
 
-from scripts.deployment_smoke import SmokeConfig, SmokeFailure, run_smoke
+from scripts.deployment_smoke import (
+    SmokeConfig,
+    SmokeFailure,
+    _request_json,
+    _snapshot_counts,
+    run_smoke,
+)
+
+
+def verify_empty_project(config: SmokeConfig) -> dict[str, int]:
+    """Fail before import when the target project already contains production data."""
+    snapshot_path = f"/api/projects/{config.project_id}/production-snapshot"
+    snapshot = _request_json(config, snapshot_path)
+    if not isinstance(snapshot, dict):
+        raise SmokeFailure("Production snapshot response has an invalid shape")
+    counts = _snapshot_counts(snapshot, expected_project_id=config.project_id)
+    if counts["scenes"] != 0 or counts["shots"] != 0:
+        raise SmokeFailure(
+            "Idempotency smoke requires an empty isolated project; "
+            f"found {counts['scenes']} scenes and {counts['shots']} shots"
+        )
+    return counts
 
 
 def verify_import_idempotency(config: SmokeConfig) -> dict[str, object]:
@@ -23,6 +44,7 @@ def verify_import_idempotency(config: SmokeConfig) -> dict[str, object]:
     if config.screenplay_file is None:
         raise SmokeFailure("Idempotency verification requires --screenplay-file")
 
+    verify_empty_project(config)
     first = run_smoke(config)
     second = run_smoke(config)
 
