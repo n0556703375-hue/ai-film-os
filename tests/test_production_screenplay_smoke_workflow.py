@@ -35,6 +35,15 @@ class ProductionScreenplaySmokeWorkflowTests(unittest.TestCase):
         self.assertIn("--execute-import", self.workflow)
         self.assertIn("cancel-in-progress: false", self.workflow)
 
+    def test_preflight_rejects_invalid_project_and_checks_health_first(self) -> None:
+        self.assertIn("project_id must be a positive existing project ID", self.workflow)
+        self.assertIn("https://ai-film-os.onrender.com/health", self.workflow)
+        self.assertIn("--retry-all-errors", self.workflow)
+        self.assertLess(
+            self.workflow.index("Validate project input and deployed health"),
+            self.workflow.index("Materialize screenplay without logging it"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
