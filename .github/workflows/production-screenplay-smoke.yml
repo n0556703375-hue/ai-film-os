@@ -73,7 +73,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/deployment_import_idempotency.py \
+          python -m scripts.deployment_import_idempotency \
             --base-url https://ai-film-os.onrender.com \
             --project-id "${{ inputs.project_id }}" \
             --screenplay-file production-smoke-screenplay.txt \
