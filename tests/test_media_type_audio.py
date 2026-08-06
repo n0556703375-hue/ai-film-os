@@ -17,6 +17,7 @@ import pydantic
 from app.core.config import settings
 from app.database.connection import (
     _media_type_check_allows_audio,
+    _migrate_media_results_media_type,
     get_connection,
     init_db,
     migrate_database,
@@ -127,6 +128,40 @@ def _build_legacy_database(path: Path) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def _constraint_probe_connection(
+    media_type_check: str,
+    *,
+    unrelated_constraint: str = "",
+) -> sqlite3.Connection:
+    """Build the minimum schema needed to exercise CHECK detection/rebuild."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(f"""
+        CREATE TABLE shots (id INTEGER PRIMARY KEY);
+        CREATE TABLE prompt_versions (id INTEGER PRIMARY KEY);
+        CREATE TABLE media_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            shot_id INTEGER NOT NULL,
+            media_type TEXT NOT NULL {media_type_check},
+            version INTEGER NOT NULL,
+            url TEXT NOT NULL,
+            provider TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            prompt_version_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'טיוטה',
+            notes TEXT NOT NULL DEFAULT '',
+            metadata_json TEXT NOT NULL DEFAULT '{{}}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(shot_id, media_type, version),
+            FOREIGN KEY(shot_id) REFERENCES shots(id) ON DELETE CASCADE,
+            FOREIGN KEY(prompt_version_id) REFERENCES prompt_versions(id) ON DELETE SET NULL
+            {unrelated_constraint}
+        );
+    """)
+    conn.commit()
+    return conn
 
 
 class FreshSchemaAudioTests(_RealDbTestCase):
@@ -269,6 +304,143 @@ class MigrationTests(_RealDbTestCase):
             migrate_database(conn)
             conn.commit()
             self.assertEqual(self._snapshot(conn), (first_rows, first_events))
+        finally:
+            conn.close()
+
+    def test_unrelated_audio_text_does_not_skip_legacy_migration(self):
+        conn = _constraint_probe_connection(
+            "CHECK(media_type IN ('image', 'video'))",
+            unrelated_constraint=", CHECK(provider <> 'audio')",
+        )
+        try:
+            self.assertFalse(_media_type_check_allows_audio(conn))
+            _migrate_media_results_media_type(conn)
+            self.assertTrue(_media_type_check_allows_audio(conn))
+        finally:
+            conn.close()
+
+    def test_extra_media_type_is_not_accepted_as_target_contract(self):
+        conn = _constraint_probe_connection(
+            "CHECK(media_type IN ('image', 'video', 'audio', 'podcast'))"
+        )
+        try:
+            self.assertFalse(_media_type_check_allows_audio(conn))
+            _migrate_media_results_media_type(conn)
+            self.assertTrue(_media_type_check_allows_audio(conn))
+            conn.execute("INSERT INTO shots(id) VALUES (1)")
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO media_results (shot_id,media_type,version,url) "
+                    "VALUES (1,'podcast',1,'https://a/x.mp3')"
+                )
+        finally:
+            conn.close()
+
+    def test_active_caller_transaction_is_never_committed_or_rolled_back(self):
+        _build_legacy_database(settings.database_path)
+        conn = sqlite3.connect(settings.database_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        try:
+            original_sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='media_results'"
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO projects (id,name,description,visual_style,rules) "
+                "VALUES (99,'uncommitted','','','')"
+            )
+            self.assertTrue(conn.in_transaction)
+
+            with self.assertRaisesRegex(RuntimeError, "requires no active transaction"):
+                _migrate_media_results_media_type(conn)
+
+            self.assertTrue(conn.in_transaction)
+            self.assertIsNotNone(
+                conn.execute("SELECT 1 FROM projects WHERE id=99").fetchone()
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT sql FROM sqlite_master "
+                    "WHERE type='table' AND name='media_results'"
+                ).fetchone()[0],
+                original_sql,
+            )
+            self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+
+            observer = sqlite3.connect(settings.database_path)
+            try:
+                self.assertIsNone(
+                    observer.execute("SELECT 1 FROM projects WHERE id=99").fetchone()
+                )
+            finally:
+                observer.close()
+
+            conn.rollback()
+            self.assertIsNone(
+                conn.execute("SELECT 1 FROM projects WHERE id=99").fetchone()
+            )
+        finally:
+            conn.close()
+
+    def test_failed_rebuild_rolls_back_every_schema_and_data_change(self):
+        _build_legacy_database(settings.database_path)
+        conn = sqlite3.connect(settings.database_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute(
+            "INSERT INTO approval_events "
+            "(id,shot_id,media_result_id,event_type) "
+            "VALUES (102,1,999,'preexisting_invalid_reference')"
+        )
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=ON")
+        try:
+            original_sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='media_results'"
+            ).fetchone()[0]
+            before_rows, before_events = self._snapshot(conn)
+            before_sequence = conn.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name='media_results'"
+            ).fetchone()[0]
+
+            with self.assertRaisesRegex(RuntimeError, "foreign-key violation"):
+                _migrate_media_results_media_type(conn)
+
+            self.assertFalse(conn.in_transaction)
+            self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+            self.assertFalse(_media_type_check_allows_audio(conn))
+            self.assertEqual(
+                conn.execute(
+                    "SELECT sql FROM sqlite_master "
+                    "WHERE type='table' AND name='media_results'"
+                ).fetchone()[0],
+                original_sql,
+            )
+            self.assertEqual(self._snapshot(conn), (before_rows, before_events))
+            self.assertIsNone(
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type='table' AND name='_media_results_audio_migration'"
+                ).fetchone()
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT seq FROM sqlite_sequence WHERE name='media_results'"
+                ).fetchone()[0],
+                before_sequence,
+            )
+        finally:
+            conn.close()
+
+    def test_migration_restores_initial_foreign_keys_off_state(self):
+        _build_legacy_database(settings.database_path)
+        conn = sqlite3.connect(settings.database_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            _migrate_media_results_media_type(conn)
+            self.assertTrue(_media_type_check_allows_audio(conn))
+            self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 0)
         finally:
             conn.close()
 

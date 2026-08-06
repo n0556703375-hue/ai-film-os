@@ -1,3 +1,4 @@
+import re
 import sqlite3
 from contextlib import closing
 
@@ -63,15 +64,34 @@ _MEDIA_RESULTS_COLUMNS = (
     "prompt_version_id, status, notes, metadata_json, created_at"
 )
 
+_MEDIA_TYPE_CHECK_PATTERN = re.compile(
+    r"CHECK\s*\(\s*media_type\s+IN\s*\((?P<values>[^)]*)\)\s*\)",
+    flags=re.IGNORECASE,
+)
+_QUOTED_SQL_VALUE_PATTERN = re.compile(r"'([^']*)'")
+_EXPECTED_MEDIA_TYPES = frozenset({"image", "video", "audio"})
+
 
 def _media_type_check_allows_audio(conn: sqlite3.Connection) -> bool:
-    """True when media_results is absent or already allows 'audio'."""
+    """True when media_results is absent or has the exact target CHECK."""
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='media_results'"
     ).fetchone()
     if not row or not row[0]:
         return True
-    return "'audio'" in row[0]
+
+    match = _MEDIA_TYPE_CHECK_PATTERN.search(row[0])
+    if not match:
+        return False
+
+    tokens = [token.strip() for token in match.group("values").split(",")]
+    values = []
+    for token in tokens:
+        quoted = _QUOTED_SQL_VALUE_PATTERN.fullmatch(token)
+        if not quoted:
+            return False
+        values.append(quoted.group(1))
+    return len(values) == len(_EXPECTED_MEDIA_TYPES) and set(values) == _EXPECTED_MEDIA_TYPES
 
 
 def _migrate_media_results_media_type(conn: sqlite3.Connection) -> None:
@@ -85,8 +105,8 @@ def _migrate_media_results_media_type(conn: sqlite3.Connection) -> None:
         perform an implicit DELETE of every media_results row, firing
         approval_events' ON DELETE SET NULL and destroying approval references.
         Since ids are preserved, references stay valid once the new table is in
-        place. PRAGMA foreign_keys is a no-op inside a transaction, so any
-        pending transaction is flushed and the pragma is toggled outside it.
+        place. PRAGMA foreign_keys is a no-op inside a transaction, so the
+        migration refuses to commit or roll back a caller-owned transaction.
       * The rebuild runs inside an explicit transaction. Any failure rolls back,
         leaving the original table intact — never a half-rebuilt table.
       * PRAGMA foreign_key_check runs before commit; any row it returns aborts
@@ -100,7 +120,12 @@ def _migrate_media_results_media_type(conn: sqlite3.Connection) -> None:
         return
 
     if conn.in_transaction:
-        conn.commit()
+        raise RuntimeError(
+            "media_results audio migration requires no active transaction."
+        )
+
+    foreign_keys_row = conn.execute("PRAGMA foreign_keys").fetchone()
+    foreign_keys_enabled = bool(foreign_keys_row[0]) if foreign_keys_row else False
 
     seq_row = conn.execute(
         "SELECT seq FROM sqlite_sequence WHERE name='media_results'"
@@ -136,7 +161,9 @@ def _migrate_media_results_media_type(conn: sqlite3.Connection) -> None:
         conn.rollback()
         raise
     finally:
-        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute(
+            "PRAGMA foreign_keys=" + ("ON" if foreign_keys_enabled else "OFF")
+        )
 
 
 def migrate_database(conn: sqlite3.Connection) -> None:
