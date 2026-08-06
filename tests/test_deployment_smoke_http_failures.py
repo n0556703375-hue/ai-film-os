@@ -3,7 +3,7 @@ import unittest
 from urllib.error import HTTPError, URLError
 from unittest.mock import patch
 
-from scripts.deployment_smoke import SmokeConfig, SmokeFailure, _request_json
+from scripts.deployment_smoke import RetryableChunkFailure, SmokeConfig, SmokeFailure, _request_json
 
 
 class DeploymentSmokeHttpFailureTests(unittest.TestCase):
@@ -57,6 +57,114 @@ class DeploymentSmokeHttpFailureTests(unittest.TestCase):
         self.assertIn("HTTP 504", message)
         self.assertNotIn("upstream token", message)
         self.assertNotIn("<html>", message)
+
+    @patch("scripts.deployment_smoke.urlopen")
+    def test_retryable_502_raises_retryable_chunk_failure(self, urlopen):
+        retryable_body = b'{"detail":{"message":"transient","code":"screenplay_chunk_failure","retryable":true}}'
+        urlopen.side_effect = HTTPError(
+            url="https://example.invalid/api/import-runs/process-next",
+            code=502,
+            msg="Bad Gateway",
+            hdrs={"Content-Type": "application/json"},
+            fp=io.BytesIO(retryable_body),
+        )
+
+        with self.assertRaises(RetryableChunkFailure) as captured:
+            _request_json(
+                self.config,
+                "/api/import-runs/process-next",
+                method="POST",
+                payload={"project_id": 7},
+            )
+
+        message = str(captured.exception)
+        self.assertIn("POST /api/import-runs/process-next", message)
+        self.assertIn("retryable HTTP 502", message)
+        self.assertNotIn("transient", message)
+        self.assertNotIn("screenplay_chunk_failure", message)
+
+    @patch("scripts.deployment_smoke.urlopen")
+    def test_retryable_chunk_failure_is_subclass_of_smoke_failure(self, urlopen):
+        retryable_body = b'{"detail":{"retryable":true}}'
+        urlopen.side_effect = HTTPError(
+            url="https://example.invalid/api/import-runs/process-next",
+            code=502,
+            msg="Bad Gateway",
+            hdrs={"Content-Type": "application/json"},
+            fp=io.BytesIO(retryable_body),
+        )
+
+        with self.assertRaises(SmokeFailure):
+            _request_json(
+                self.config,
+                "/api/import-runs/process-next",
+                method="POST",
+                payload={"project_id": 7},
+            )
+
+    @patch("scripts.deployment_smoke.urlopen")
+    def test_non_retryable_502_raises_plain_smoke_failure(self, urlopen):
+        non_retryable_body = b'{"detail":{"message":"permanent failure","retryable":false}}'
+        urlopen.side_effect = HTTPError(
+            url="https://example.invalid/api/import-runs/process-next",
+            code=502,
+            msg="Bad Gateway",
+            hdrs={"Content-Type": "application/json"},
+            fp=io.BytesIO(non_retryable_body),
+        )
+
+        with self.assertRaises(SmokeFailure) as captured:
+            _request_json(
+                self.config,
+                "/api/import-runs/process-next",
+                method="POST",
+                payload={"project_id": 7},
+            )
+
+        self.assertNotIsInstance(captured.exception, RetryableChunkFailure)
+
+    @patch("scripts.deployment_smoke.urlopen")
+    def test_non_boolean_retryable_values_are_not_retryable(self, urlopen):
+        for encoded_value in ('"true"', '"false"', "1", "null"):
+            with self.subTest(retryable=encoded_value):
+                body = ('{"detail":{"retryable":' + encoded_value + "}}").encode("utf-8")
+                urlopen.side_effect = HTTPError(
+                    url="https://example.invalid/api/import-runs/process-next",
+                    code=502,
+                    msg="Bad Gateway",
+                    hdrs={"Content-Type": "application/json"},
+                    fp=io.BytesIO(body),
+                )
+
+                with self.assertRaises(SmokeFailure) as captured:
+                    _request_json(
+                        self.config,
+                        "/api/import-runs/process-next",
+                        method="POST",
+                        payload={"project_id": 7},
+                    )
+
+                self.assertNotIsInstance(captured.exception, RetryableChunkFailure)
+
+    @patch("scripts.deployment_smoke.urlopen")
+    def test_502_with_unparseable_body_raises_plain_smoke_failure(self, urlopen):
+        urlopen.side_effect = HTTPError(
+            url="https://example.invalid/api/import-runs/process-next",
+            code=502,
+            msg="Bad Gateway",
+            hdrs={"Content-Type": "text/html"},
+            fp=io.BytesIO(b"<html>Bad Gateway</html>"),
+        )
+
+        with self.assertRaises(SmokeFailure) as captured:
+            _request_json(
+                self.config,
+                "/api/import-runs/process-next",
+                method="POST",
+                payload={"project_id": 7},
+            )
+
+        self.assertNotIsInstance(captured.exception, RetryableChunkFailure)
 
     @patch("scripts.deployment_smoke.urlopen")
     def test_network_failure_does_not_echo_low_level_connection_details(self, urlopen):

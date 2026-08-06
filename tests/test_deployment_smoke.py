@@ -1,11 +1,12 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from app.api.health import health
 from app.core.version import APP_VERSION
 from scripts.deployment_smoke import (
+    RetryableChunkFailure,
     SmokeConfig,
     SmokeFailure,
     _scene_ids_with_shots,
@@ -221,6 +222,75 @@ class DeploymentSmokeTests(unittest.TestCase):
         self.assertEqual(result["shot_maps_skipped"], 1)
         paths = [call.args[1] for call in request_json.call_args_list]
         self.assertNotIn("/api/scenes/11/shot-map", paths)
+
+
+    @patch("scripts.deployment_smoke.time")
+    @patch("scripts.deployment_smoke._request_json")
+    def test_process_next_retries_on_retryable_chunk_failure(self, request_json, mock_time):
+        with tempfile.TemporaryDirectory() as directory:
+            screenplay = Path(directory) / "screenplay.txt"
+            screenplay.write_text("א" * 80, encoding="utf-8")
+            request_json.side_effect = [
+                {"status": "ok"},
+                {"status": "ready"},
+                {"project": {"id": 7}, "scenes": [], "shots": []},
+                RetryableChunkFailure("transient failure on first attempt"),
+                {
+                    "screenplay_fingerprint": "f" * 64,
+                    "next_chunk_index": 1,
+                    "chunk_count": 1,
+                    "completed": True,
+                    "scenes": [{"scene_number": 1, "title": "פתיחה", "recommended_shot_count": 2}],
+                },
+                {
+                    "persisted": True,
+                    "idempotent_replay": False,
+                    "scenes_created": 1,
+                    "imported_scenes": [
+                        {"id": 11, "project_id": 7, "scene_number": 1, "title": "פתיחה", "recommended_shot_count": 2}
+                    ],
+                },
+                {"shots": [{"id": 21, "project_id": 7, "scene_id": 11}]},
+                {"project": {"id": 7}, "scenes": [{"id": 11, "project_id": 7}], "shots": [{"id": 21, "project_id": 7, "scene_id": 11}]},
+            ]
+            result = run_smoke(SmokeConfig(
+                base_url="https://example.invalid",
+                project_id=7,
+                screenplay_file=screenplay,
+                execute_import=True,
+            ))
+
+        self.assertTrue(result["import_executed"])
+        self.assertEqual(result["scenes_created"], 1)
+        self.assertEqual(result["shots_created"], 1)
+        process_next_calls = [c for c in request_json.call_args_list if "/api/import-runs/process-next" in c.args[1]]
+        self.assertEqual(len(process_next_calls), 2)
+        self.assertEqual(mock_time.sleep.call_args_list, [call(2)])
+
+    @patch("scripts.deployment_smoke.time")
+    @patch("scripts.deployment_smoke._request_json")
+    def test_process_next_raises_smoke_failure_after_max_attempts(self, request_json, mock_time):
+        with tempfile.TemporaryDirectory() as directory:
+            screenplay = Path(directory) / "screenplay.txt"
+            screenplay.write_text("א" * 80, encoding="utf-8")
+            request_json.side_effect = [
+                {"status": "ok"},
+                {"status": "ready"},
+                {"project": {"id": 7}, "scenes": [], "shots": []},
+                RetryableChunkFailure("attempt 1"),
+                RetryableChunkFailure("attempt 2"),
+                RetryableChunkFailure("attempt 3"),
+            ]
+
+            with self.assertRaisesRegex(SmokeFailure, "failed after 3 attempts"):
+                run_smoke(SmokeConfig(
+                    base_url="https://example.invalid",
+                    project_id=7,
+                    screenplay_file=screenplay,
+                    execute_import=True,
+                ))
+
+        self.assertEqual(mock_time.sleep.call_args_list, [call(2), call(4)])
 
 
 if __name__ == "__main__":
