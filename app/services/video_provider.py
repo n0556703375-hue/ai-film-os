@@ -44,7 +44,9 @@ class DisabledVideoProvider:
 
 def get_video_provider() -> VideoProvider:
     import os
-    if os.getenv("KLING_API_KEY", "").strip():
+    # Kling requires both halves of the AccessKey/SecretKey pair to sign a JWT;
+    # a partially configured environment stays disabled rather than failing later.
+    if os.getenv("KLING_ACCESS_KEY", "").strip() and os.getenv("KLING_SECRET_KEY", "").strip():
         from app.services.kling_provider import KlingProvider
         return KlingProvider()
     return DisabledVideoProvider()

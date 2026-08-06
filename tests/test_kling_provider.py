@@ -1,23 +1,38 @@
-"""Tests for app/services/kling_provider.py
+"""Contract-fixture tests for app/services/kling_provider.py
 
-Covers: submit(), check_task(), helpers (_model_for, _camera_motion_to_kling,
-_estimate_cost), and the get_video_provider() Kling routing path.
-No real API keys are used — all HTTP calls are mocked.
+Every test is deterministic and offline: HTTP is faked, time is injected,
+and no real credentials or paid API calls are used. Fixtures mirror the
+documented Kling open-platform contract:
+
+  auth      — HS256 JWT, iss=AccessKey, exp=+1800s, nbf=-5s, Bearer header
+  submit    — POST {base}/v1/videos/image2video with model_name/image/...
+  poll      — GET  {base}/v1/videos/image2video/{task_id}
+  envelope  — {code, message, request_id, data}
+  status    — submitted | processing | succeed | failed
 """
+import base64
+import hashlib
+import hmac
 import json
-import os
 import unittest
 from unittest.mock import patch
 
 import httpx
 
 from app.core.config import settings
-from app.services.video_provider import VideoGenerationRequest, VideoProviderNotConfigured
+from app.services.video_provider import (
+    VideoGenerationRequest,
+    VideoProviderNotConfigured,
+)
 
+ACCESS_KEY = "test-access-key"
+SECRET_KEY = "test-secret-key"
+BASE_URL = "https://api-singapore.klingai.com"
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# Values that must never leak into an exception message.
+SIGNED_MEDIA_URL = "https://cdn.klingai.com/output.mp4?sig=SECRETSIGNATURE&exp=999"
+PROVIDER_MESSAGE = "internal provider stack trace do-not-print"
+
 
 def _req(**kwargs):
     defaults = dict(
@@ -33,31 +48,22 @@ def _req(**kwargs):
     return VideoGenerationRequest(**defaults)
 
 
-def _post_resp(status_code: int, body: dict) -> httpx.Response:
+def _resp(status_code: int, body, *, method: str = "POST", json_body: bool = True):
+    content = json.dumps(body).encode() if json_body else body
     return httpx.Response(
         status_code,
-        content=json.dumps(body).encode(),
-        headers={"content-type": "application/json"},
-        request=httpx.Request("POST", "https://api.klingai.com/v1/videos/image2video"),
+        content=content,
+        headers={"content-type": "application/json" if json_body else "text/html"},
+        request=httpx.Request(method, f"{BASE_URL}/v1/videos/image2video"),
     )
 
 
-def _get_resp(status_code: int, body: dict, task_id: str = "task-123") -> httpx.Response:
-    return httpx.Response(
-        status_code,
-        content=json.dumps(body).encode(),
-        headers={"content-type": "application/json"},
-        request=httpx.Request(
-            "GET",
-            f"https://api.klingai.com/v1/videos/image2video/{task_id}",
-        ),
-    )
+class _RecordingClient:
+    """Fake httpx.Client capturing the outbound call for contract assertions."""
 
+    calls: list = []
 
-class _FakeHttpClient:
-    """Fake httpx.Client that returns a canned response for any verb."""
-
-    def __init__(self, response: httpx.Response, timeout=None):
+    def __init__(self, response, timeout=None):
         self._response = response
 
     def __enter__(self):
@@ -67,321 +73,438 @@ class _FakeHttpClient:
         return False
 
     def post(self, url, *, json=None, headers=None):
+        type(self).calls.append({"method": "POST", "url": url, "json": json, "headers": headers})
         return self._response
 
     def get(self, url, *, headers=None):
+        type(self).calls.append({"method": "GET", "url": url, "json": None, "headers": headers})
         return self._response
 
 
-# ---------------------------------------------------------------------------
-# Model profile mapping
-# ---------------------------------------------------------------------------
+def _client_factory(response):
+    _RecordingClient.calls = []
 
-class KlingModelProfileTests(unittest.TestCase):
-    def test_fast_maps_to_v2(self):
-        from app.services.kling_provider import _model_for
-        self.assertEqual(_model_for("fast"), "kling-v2")
+    def factory(timeout=None):
+        return _RecordingClient(response, timeout=timeout)
 
-    def test_cinematic_maps_to_v3(self):
-        from app.services.kling_provider import _model_for
-        self.assertEqual(_model_for("cinematic"), "kling-v3")
-
-    def test_high_fidelity_maps_to_v3_omni(self):
-        from app.services.kling_provider import _model_for
-        self.assertEqual(_model_for("high_fidelity"), "kling-v3-omni")
-
-    def test_auto_maps_to_v3(self):
-        from app.services.kling_provider import _model_for
-        self.assertEqual(_model_for("auto"), "kling-v3")
-
-    def test_unknown_profile_falls_back_to_default_model_setting(self):
-        from app.services.kling_provider import _model_for
-        orig = settings.kling_default_model
-        settings.kling_default_model = "kling-v3"
-        try:
-            self.assertEqual(_model_for("nonexistent_profile"), "kling-v3")
-        finally:
-            settings.kling_default_model = orig
+    return factory
 
 
-# ---------------------------------------------------------------------------
-# Camera motion mapping
-# ---------------------------------------------------------------------------
+class _KlingTestCase(unittest.TestCase):
+    """Installs deterministic credentials and base URL for each test."""
 
-class KlingCameraMotionTests(unittest.TestCase):
-    def _motion(self, value):
-        from app.services.kling_provider import _camera_motion_to_kling
-        return _camera_motion_to_kling(value)
-
-    def test_tracking_maps_to_move_forward(self):
-        self.assertEqual(self._motion("tracking shot"), "move_forward")
-
-    def test_orbit_maps_to_orbit_left(self):
-        self.assertEqual(self._motion("orbit"), "orbit_left")
-
-    def test_crane_maps_to_move_up(self):
-        self.assertEqual(self._motion("crane"), "move_up")
-
-    def test_drone_maps_to_move_up(self):
-        self.assertEqual(self._motion("drone shot"), "move_up")
-
-    def test_handheld_maps_to_shake(self):
-        self.assertEqual(self._motion("handheld"), "shake")
-
-    def test_zoom_maps_to_zoom_in(self):
-        self.assertEqual(self._motion("zoom"), "zoom_in")
-
-    def test_pan_maps_to_pan_left(self):
-        self.assertEqual(self._motion("pan"), "pan_left")
-
-    def test_tilt_maps_to_tilt_up(self):
-        self.assertEqual(self._motion("tilt"), "tilt_up")
-
-    def test_unknown_motion_defaults_to_static(self):
-        self.assertEqual(self._motion("random dolly xyz"), "static")
-
-    def test_empty_string_defaults_to_static(self):
-        self.assertEqual(self._motion(""), "static")
-
-
-# ---------------------------------------------------------------------------
-# Cost estimation
-# ---------------------------------------------------------------------------
-
-class KlingCostEstimateTests(unittest.TestCase):
-    def _cost(self, dur, model):
-        from app.services.kling_provider import _estimate_cost
-        return _estimate_cost(dur, model)
-
-    def test_v2_five_second_base_cost(self):
-        self.assertAlmostEqual(self._cost(5.0, "kling-v2"), 0.028, places=4)
-
-    def test_v3_five_second_base_cost(self):
-        self.assertAlmostEqual(self._cost(5.0, "kling-v3"), 0.045, places=4)
-
-    def test_v3_omni_five_second_base_cost(self):
-        self.assertAlmostEqual(self._cost(5.0, "kling-v3-omni"), 0.065, places=4)
-
-    def test_duration_below_five_clamps_to_one_unit(self):
-        self.assertEqual(self._cost(1.0, "kling-v3"), self._cost(5.0, "kling-v3"))
-
-    def test_ten_seconds_costs_twice_five_seconds(self):
-        self.assertAlmostEqual(self._cost(10.0, "kling-v3"), 0.09, places=4)
-
-    def test_unknown_model_uses_v3_fallback_rate(self):
-        self.assertAlmostEqual(self._cost(5.0, "kling-future"), 0.045, places=4)
-
-
-# ---------------------------------------------------------------------------
-# KlingProvider.submit()
-# ---------------------------------------------------------------------------
-
-class KlingProviderSubmitTests(unittest.TestCase):
     def setUp(self):
-        self._orig_key = settings.kling_api_key
-        self._orig_base = settings.kling_api_base
-        settings.kling_api_key = "test-key"
-        settings.kling_api_base = "https://api.klingai.com"
+        self._saved = (
+            settings.kling_access_key,
+            settings.kling_secret_key,
+            settings.kling_api_base,
+            settings.kling_default_model,
+        )
+        settings.kling_access_key = ACCESS_KEY
+        settings.kling_secret_key = SECRET_KEY
+        settings.kling_api_base = BASE_URL
+        settings.kling_default_model = "kling-v2-master"
 
     def tearDown(self):
-        settings.kling_api_key = self._orig_key
-        settings.kling_api_base = self._orig_base
+        (
+            settings.kling_access_key,
+            settings.kling_secret_key,
+            settings.kling_api_base,
+            settings.kling_default_model,
+        ) = self._saved
 
-    def test_missing_key_raises_not_configured(self):
+
+# ---------------------------------------------------------------------------
+# Authentication claims and expiration
+# ---------------------------------------------------------------------------
+
+def _decode_segment(segment: str) -> dict:
+    padded = segment + "=" * (-len(segment) % 4)
+    return json.loads(base64.urlsafe_b64decode(padded))
+
+
+class KlingJwtAuthTests(_KlingTestCase):
+    def test_jwt_header_declares_hs256(self):
+        from app.services.kling_provider import encode_jwt
+
+        token = encode_jwt(ACCESS_KEY, SECRET_KEY, now=1_700_000_000)
+        header = _decode_segment(token.split(".")[0])
+        self.assertEqual(header, {"alg": "HS256", "typ": "JWT"})
+
+    def test_jwt_claims_match_documented_contract(self):
+        from app.services.kling_provider import encode_jwt
+
+        now = 1_700_000_000
+        payload = _decode_segment(encode_jwt(ACCESS_KEY, SECRET_KEY, now=now).split(".")[1])
+        self.assertEqual(payload["iss"], ACCESS_KEY)
+        self.assertEqual(payload["exp"], now + 1800)
+        self.assertEqual(payload["nbf"], now - 5)
+
+    def test_token_is_short_lived_thirty_minutes(self):
+        from app.services.kling_provider import encode_jwt
+
+        now = 1_700_000_000
+        payload = _decode_segment(encode_jwt(ACCESS_KEY, SECRET_KEY, now=now).split(".")[1])
+        self.assertEqual(payload["exp"] - payload["nbf"], 1805)
+        self.assertLessEqual(payload["exp"] - now, 1800)
+
+    def test_signature_is_hmac_sha256_over_signing_input(self):
+        from app.services.kling_provider import encode_jwt
+
+        token = encode_jwt(ACCESS_KEY, SECRET_KEY, now=1_700_000_000)
+        header_b64, payload_b64, signature_b64 = token.split(".")
+        expected = hmac.new(
+            SECRET_KEY.encode(),
+            f"{header_b64}.{payload_b64}".encode(),
+            hashlib.sha256,
+        ).digest()
+        expected_b64 = base64.urlsafe_b64encode(expected).rstrip(b"=").decode()
+        self.assertEqual(signature_b64, expected_b64)
+
+    def test_secret_key_never_appears_inside_the_token(self):
+        from app.services.kling_provider import encode_jwt
+
+        token = encode_jwt(ACCESS_KEY, SECRET_KEY, now=1_700_000_000)
+        self.assertNotIn(SECRET_KEY, token)
+        self.assertNotIn(SECRET_KEY, _decode_segment(token.split(".")[1]).get("iss", ""))
+
+    def test_tokens_are_minted_per_request_not_cached(self):
+        from app.services.kling_provider import encode_jwt
+
+        early = encode_jwt(ACCESS_KEY, SECRET_KEY, now=1_700_000_000)
+        later = encode_jwt(ACCESS_KEY, SECRET_KEY, now=1_700_000_600)
+        self.assertNotEqual(early, later)
+
+    def test_missing_credentials_raise_not_configured(self):
         from app.services.kling_provider import KlingProvider
-        settings.kling_api_key = ""
-        provider = KlingProvider()
+
+        settings.kling_access_key = ""
         with self.assertRaises(VideoProviderNotConfigured):
-            provider.submit(_req())
+            KlingProvider().submit(_req())
 
-    def test_successful_submit_returns_task_id(self):
+    def test_partial_credentials_raise_not_configured(self):
         from app.services.kling_provider import KlingProvider
-        resp = _post_resp(202, {"data": {"task_id": "task-abc"}})
-        with patch("app.services.kling_provider.httpx.Client",
-                   lambda **kw: _FakeHttpClient(resp)):
-            task_id = KlingProvider().submit(_req())
-        self.assertEqual(task_id, "task-abc")
 
-    def test_task_id_at_top_level_is_accepted(self):
+        settings.kling_secret_key = ""
+        with self.assertRaises(VideoProviderNotConfigured):
+            KlingProvider().submit(_req())
+
+    def test_authorization_header_uses_bearer_jwt(self):
         from app.services.kling_provider import KlingProvider
-        resp = _post_resp(200, {"task_id": "task-top"})
-        with patch("app.services.kling_provider.httpx.Client",
-                   lambda **kw: _FakeHttpClient(resp)):
-            task_id = KlingProvider().submit(_req())
-        self.assertEqual(task_id, "task-top")
 
-    def test_401_raises_not_configured(self):
-        from app.services.kling_provider import KlingProvider
-        resp = _post_resp(401, {"error": "unauthorized"})
-        with patch("app.services.kling_provider.httpx.Client",
-                   lambda **kw: _FakeHttpClient(resp)):
-            with self.assertRaises(VideoProviderNotConfigured):
-                KlingProvider().submit(_req())
+        response = _resp(200, {"code": 0, "data": {"task_id": "task-1"}})
+        with patch("httpx.Client", _client_factory(response)):
+            KlingProvider().submit(_req())
 
-    def test_500_raises_runtime_error(self):
-        from app.services.kling_provider import KlingProvider
-        resp = _post_resp(500, {"error": "server error"})
-        with patch("app.services.kling_provider.httpx.Client",
-                   lambda **kw: _FakeHttpClient(resp)):
-            with self.assertRaises(RuntimeError):
-                KlingProvider().submit(_req())
-
-    def test_missing_task_id_raises_runtime_error(self):
-        from app.services.kling_provider import KlingProvider
-        resp = _post_resp(202, {"data": {}})
-        with patch("app.services.kling_provider.httpx.Client",
-                   lambda **kw: _FakeHttpClient(resp)):
-            with self.assertRaises(RuntimeError):
-                KlingProvider().submit(_req())
-
-    def test_dialogue_mode_includes_with_audio_flag(self):
-        from app.services.kling_provider import KlingProvider
-        captured = []
-
-        class _CapturingClient:
-            def __init__(self, **kw):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def post(self, url, *, json=None, headers=None):
-                captured.append(json)
-                return _post_resp(202, {"data": {"task_id": "t1"}})
-
-        with patch("app.services.kling_provider.httpx.Client", _CapturingClient):
-            KlingProvider().submit(_req(audio_mode="dialogue"))
-
-        self.assertTrue(captured[0].get("with_audio"))
-
-    def test_non_dialogue_mode_omits_with_audio(self):
-        from app.services.kling_provider import KlingProvider
-        captured = []
-
-        class _CapturingClient:
-            def __init__(self, **kw):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def post(self, url, *, json=None, headers=None):
-                captured.append(json)
-                return _post_resp(202, {"data": {"task_id": "t2"}})
-
-        with patch("app.services.kling_provider.httpx.Client", _CapturingClient):
-            KlingProvider().submit(_req(audio_mode="none"))
-
-        self.assertNotIn("with_audio", captured[0])
+        header = _RecordingClient.calls[0]["headers"]["Authorization"]
+        self.assertTrue(header.startswith("Bearer "))
+        token = header.split(" ", 1)[1]
+        self.assertEqual(len(token.split(".")), 3)
+        self.assertEqual(_decode_segment(token.split(".")[1])["iss"], ACCESS_KEY)
 
 
 # ---------------------------------------------------------------------------
-# KlingProvider.check_task()
+# Submit endpoint and payload
 # ---------------------------------------------------------------------------
 
-class KlingProviderCheckTaskTests(unittest.TestCase):
-    def setUp(self):
-        self._orig_key = settings.kling_api_key
-        self._orig_base = settings.kling_api_base
-        settings.kling_api_key = "test-key"
-        settings.kling_api_base = "https://api.klingai.com"
+class KlingSubmitContractTests(_KlingTestCase):
+    def _submit(self, request=None, body=None):
+        response = _resp(200, body or {"code": 0, "data": {"task_id": "task-1"}})
+        with patch("httpx.Client", _client_factory(response)):
+            return KlingProviderFactory().submit(request or _req())
 
-    def tearDown(self):
-        settings.kling_api_key = self._orig_key
-        settings.kling_api_base = self._orig_base
+    def test_submit_targets_documented_image2video_endpoint(self):
+        self._submit()
+        self.assertEqual(
+            _RecordingClient.calls[0]["url"],
+            f"{BASE_URL}/v1/videos/image2video",
+        )
+
+    def test_default_base_url_is_the_international_host(self):
+        from app.core.config import KLING_DEFAULT_API_BASE
+
+        self.assertEqual(KLING_DEFAULT_API_BASE, "https://api-singapore.klingai.com")
+
+    def test_default_model_is_a_supported_identifier(self):
+        from app.core.config import KLING_FALLBACK_MODEL
+        from app.services.kling_provider import SUPPORTED_MODELS
+
+        self.assertIn(KLING_FALLBACK_MODEL, SUPPORTED_MODELS)
+
+    def test_payload_uses_documented_field_names(self):
+        self._submit()
+        payload = _RecordingClient.calls[0]["json"]
+        self.assertIn("model_name", payload)
+        self.assertIn("image", payload)
+        self.assertNotIn("model", payload)
+        self.assertNotIn("image_url", payload)
+        self.assertNotIn("aspect_ratio", payload)
+        self.assertNotIn("with_audio", payload)
+
+    def test_duration_is_snapped_to_supported_string_values(self):
+        self._submit(_req(duration_seconds=5.0))
+        self.assertEqual(_RecordingClient.calls[0]["json"]["duration"], "5")
+        self._submit(_req(duration_seconds=12.0))
+        self.assertEqual(_RecordingClient.calls[0]["json"]["duration"], "10")
+
+    def test_model_profiles_map_to_supported_model_identifiers(self):
+        from app.services.kling_provider import SUPPORTED_MODELS, _model_for
+
+        for profile in ("fast", "cinematic", "high_fidelity", "auto"):
+            with self.subTest(profile=profile):
+                self.assertIn(_model_for(profile), SUPPORTED_MODELS)
+
+    def test_unknown_profile_falls_back_to_supported_model(self):
+        from app.services.kling_provider import SUPPORTED_MODELS, _model_for
+
+        settings.kling_default_model = "kling-v3-does-not-exist"
+        self.assertIn(_model_for("nonexistent"), SUPPORTED_MODELS)
+
+    def test_camera_control_omitted_when_no_motion_requested(self):
+        self._submit(_req(camera_motion=""))
+        self.assertNotIn("camera_control", _RecordingClient.calls[0]["json"])
+
+    def test_camera_control_uses_documented_shape(self):
+        self._submit(_req(camera_motion="orbit"))
+        self.assertEqual(
+            _RecordingClient.calls[0]["json"]["camera_control"],
+            {"type": "left_turn_forward"},
+        )
+        self._submit(_req(camera_motion="zoom in"))
+        control = _RecordingClient.calls[0]["json"]["camera_control"]
+        self.assertEqual(control["type"], "simple")
+        self.assertIn("zoom", control["config"])
+
+    def test_submit_returns_task_id_from_envelope(self):
+        self.assertEqual(self._submit(), "task-1")
+
+    def test_missing_task_id_raises_without_echoing_body(self):
+        with self.assertRaises(RuntimeError) as captured:
+            self._submit(body={"code": 0, "message": PROVIDER_MESSAGE, "data": {}})
+        self.assertNotIn(PROVIDER_MESSAGE, str(captured.exception))
+
+
+def KlingProviderFactory():
+    from app.services.kling_provider import KlingProvider
+
+    return KlingProvider()
+
+
+# ---------------------------------------------------------------------------
+# Polling endpoint and status parsing
+# ---------------------------------------------------------------------------
+
+class KlingPollContractTests(_KlingTestCase):
+    def _check(self, body, status_code=200, json_body=True):
+        response = _resp(status_code, body, method="GET", json_body=json_body)
+        with patch("httpx.Client", _client_factory(response)):
+            return KlingProviderFactory().check_task("task-1")
+
+    def test_poll_targets_documented_task_endpoint(self):
+        self._check({"code": 0, "data": {"task_status": "processing"}})
+        self.assertEqual(
+            _RecordingClient.calls[0]["url"],
+            f"{BASE_URL}/v1/videos/image2video/task-1",
+        )
+        self.assertEqual(_RecordingClient.calls[0]["method"], "GET")
+
+    def test_submitted_status_is_pending(self):
+        result = self._check({"code": 0, "data": {"task_status": "submitted"}})
+        self.assertEqual(result["status"], "pending")
+
+    def test_processing_status_is_pending(self):
+        result = self._check({"code": 0, "data": {"task_status": "processing"}})
+        self.assertEqual(result["status"], "pending")
 
     def test_succeed_status_returns_video_url(self):
+        result = self._check(
+            {
+                "code": 0,
+                "data": {
+                    "task_status": "succeed",
+                    "task_result": {"videos": [{"id": "v1", "url": SIGNED_MEDIA_URL}]},
+                },
+            }
+        )
+        self.assertEqual(result["status"], "succeed")
+        self.assertEqual(result["url"], SIGNED_MEDIA_URL)
+
+    def test_failed_status_is_reported_without_provider_text(self):
+        result = self._check(
+            {
+                "code": 0,
+                "data": {"task_status": "failed", "task_status_msg": PROVIDER_MESSAGE},
+            }
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["url"], "")
+        self.assertNotIn(PROVIDER_MESSAGE, result["reason"])
+
+    def test_succeed_without_videos_raises_without_leaking_body(self):
+        with self.assertRaises(RuntimeError) as captured:
+            self._check(
+                {
+                    "code": 0,
+                    "message": PROVIDER_MESSAGE,
+                    "data": {"task_status": "succeed", "task_result": {"videos": []}},
+                }
+            )
+        self.assertNotIn(PROVIDER_MESSAGE, str(captured.exception))
+
+    def test_unknown_status_raises(self):
+        with self.assertRaises(RuntimeError):
+            self._check({"code": 0, "data": {"task_status": "teleported"}})
+
+
+# ---------------------------------------------------------------------------
+# Error handling: 401/403, non-zero code, malformed payloads
+# ---------------------------------------------------------------------------
+
+class KlingErrorContractTests(_KlingTestCase):
+    def _submit_response(self, status_code, body, json_body=True):
+        response = _resp(status_code, body, json_body=json_body)
+        with patch("httpx.Client", _client_factory(response)):
+            return KlingProviderFactory().submit(_req())
+
+    def test_401_raises_not_configured(self):
+        with self.assertRaises(VideoProviderNotConfigured):
+            self._submit_response(401, {"code": 1001, "message": PROVIDER_MESSAGE})
+
+    def test_403_raises_not_configured(self):
+        with self.assertRaises(VideoProviderNotConfigured):
+            self._submit_response(403, {"code": 1002, "message": PROVIDER_MESSAGE})
+
+    def test_401_message_does_not_leak_credentials_or_body(self):
+        with self.assertRaises(VideoProviderNotConfigured) as captured:
+            self._submit_response(401, {"code": 1001, "message": PROVIDER_MESSAGE})
+        message = str(captured.exception)
+        self.assertNotIn(PROVIDER_MESSAGE, message)
+        self.assertNotIn(SECRET_KEY, message)
+        self.assertNotIn(ACCESS_KEY, message)
+
+    def test_server_error_reports_status_only(self):
+        with self.assertRaises(RuntimeError) as captured:
+            self._submit_response(500, {"code": 5000, "message": PROVIDER_MESSAGE})
+        message = str(captured.exception)
+        self.assertIn("500", message)
+        self.assertNotIn(PROVIDER_MESSAGE, message)
+
+    def test_non_zero_envelope_code_raises_with_code_only(self):
+        with self.assertRaises(RuntimeError) as captured:
+            self._submit_response(200, {"code": 1303, "message": PROVIDER_MESSAGE})
+        message = str(captured.exception)
+        self.assertIn("1303", message)
+        self.assertNotIn(PROVIDER_MESSAGE, message)
+
+    def test_malformed_json_raises_without_echoing_payload(self):
+        with self.assertRaises(RuntimeError) as captured:
+            self._submit_response(200, b"<html>upstream token=do-not-print</html>", json_body=False)
+        message = str(captured.exception)
+        self.assertNotIn("do-not-print", message)
+        self.assertNotIn("<html>", message)
+
+    def test_non_dict_json_body_raises(self):
+        with self.assertRaises(RuntimeError):
+            self._submit_response(200, ["unexpected", "list"])
+
+    def test_request_id_is_surfaced_when_well_formed(self):
+        with self.assertRaises(RuntimeError) as captured:
+            self._submit_response(
+                200, {"code": 1303, "message": PROVIDER_MESSAGE, "request_id": "abc123XYZ"}
+            )
+        self.assertIn("abc123XYZ", str(captured.exception))
+
+    def test_untrusted_request_id_is_not_surfaced(self):
+        with self.assertRaises(RuntimeError) as captured:
+            self._submit_response(
+                200,
+                {"code": 1303, "request_id": "<script>alert(1)</script> " + PROVIDER_MESSAGE},
+            )
+        message = str(captured.exception)
+        self.assertNotIn("<script>", message)
+        self.assertNotIn(PROVIDER_MESSAGE, message)
+
+
+# ---------------------------------------------------------------------------
+# Redaction proof: credentials and media URLs never reach exceptions
+# ---------------------------------------------------------------------------
+
+class KlingRedactionTests(_KlingTestCase):
+    def test_no_exception_path_leaks_secret_or_prompt(self):
         from app.services.kling_provider import KlingProvider
-        resp = _get_resp(200, {
+
+        secret_prompt = "CONFIDENTIAL SCREENPLAY LINE"
+        fixtures = [
+            (401, {"code": 1001, "message": PROVIDER_MESSAGE}),
+            (403, {"code": 1002, "message": PROVIDER_MESSAGE}),
+            (500, {"code": 5000, "message": PROVIDER_MESSAGE}),
+            (200, {"code": 1303, "message": PROVIDER_MESSAGE}),
+            (200, {"code": 0, "message": PROVIDER_MESSAGE, "data": {}}),
+        ]
+        for status_code, body in fixtures:
+            with self.subTest(status=status_code, code=body.get("code")):
+                response = _resp(status_code, body)
+                with patch("httpx.Client", _client_factory(response)):
+                    with self.assertRaises((RuntimeError, VideoProviderNotConfigured)) as captured:
+                        KlingProvider().submit(_req(prompt=secret_prompt))
+                message = str(captured.exception)
+                self.assertNotIn(SECRET_KEY, message)
+                self.assertNotIn(ACCESS_KEY, message)
+                self.assertNotIn(secret_prompt, message)
+                self.assertNotIn(PROVIDER_MESSAGE, message)
+                self.assertNotIn("Bearer", message)
+
+    def test_signed_media_url_never_appears_in_failure_exception(self):
+        from app.services.kling_provider import KlingProvider
+
+        body = {
+            "code": 0,
             "data": {
                 "task_status": "succeed",
-                "task_result": {"videos": [{"url": "https://cdn.kling.ai/video.mp4"}]},
-            }
-        })
-        with patch("app.services.kling_provider.httpx.Client",
-                   lambda **kw: _FakeHttpClient(resp)):
-            result = KlingProvider().check_task("task-123")
-        self.assertEqual(result["status"], "succeed")
-        self.assertEqual(result["url"], "https://cdn.kling.ai/video.mp4")
+                "task_result": {"videos": [{"id": "v1"}]},
+                "task_status_msg": SIGNED_MEDIA_URL,
+            },
+        }
+        response = _resp(200, body, method="GET")
+        with patch("httpx.Client", _client_factory(response)):
+            with self.assertRaises(RuntimeError) as captured:
+                KlingProvider().check_task("task-1")
+        self.assertNotIn(SIGNED_MEDIA_URL, str(captured.exception))
+        self.assertNotIn("sig=", str(captured.exception))
 
-    def test_pending_status_returns_pending(self):
+    def test_failure_reason_is_a_fixed_safe_string(self):
         from app.services.kling_provider import KlingProvider
-        resp = _get_resp(200, {"data": {"task_status": "processing"}})
-        with patch("app.services.kling_provider.httpx.Client",
-                   lambda **kw: _FakeHttpClient(resp)):
-            result = KlingProvider().check_task("task-123")
-        self.assertEqual(result["status"], "pending")
-        self.assertEqual(result["url"], "")
 
-    def test_failed_status_returns_reason(self):
-        from app.services.kling_provider import KlingProvider
-        resp = _get_resp(200, {
-            "data": {"task_status": "failed", "task_status_msg": "out of quota"}
-        })
-        with patch("app.services.kling_provider.httpx.Client",
-                   lambda **kw: _FakeHttpClient(resp)):
-            result = KlingProvider().check_task("task-123")
-        self.assertEqual(result["status"], "failed")
-        self.assertIn("out of quota", result["reason"])
-
-    def test_succeed_without_videos_raises(self):
-        from app.services.kling_provider import KlingProvider
-        resp = _get_resp(200, {
-            "data": {"task_status": "succeed", "task_result": {"videos": []}}
-        })
-        with patch("app.services.kling_provider.httpx.Client",
-                   lambda **kw: _FakeHttpClient(resp)):
-            with self.assertRaises(RuntimeError):
-                KlingProvider().check_task("task-123")
-
-    def test_non_200_poll_raises_runtime_error(self):
-        from app.services.kling_provider import KlingProvider
-        resp = _get_resp(503, {})
-        with patch("app.services.kling_provider.httpx.Client",
-                   lambda **kw: _FakeHttpClient(resp)):
-            with self.assertRaises(RuntimeError):
-                KlingProvider().check_task("task-123")
+        body = {
+            "code": 0,
+            "data": {"task_status": "failed", "task_status_msg": SIGNED_MEDIA_URL},
+        }
+        response = _resp(200, body, method="GET")
+        with patch("httpx.Client", _client_factory(response)):
+            result = KlingProvider().check_task("task-1")
+        self.assertNotIn(SIGNED_MEDIA_URL, result["reason"])
+        self.assertNotIn("sig=", result["reason"])
 
 
 # ---------------------------------------------------------------------------
-# Provider name
+# Provider routing
 # ---------------------------------------------------------------------------
 
-class KlingProviderMetaTests(unittest.TestCase):
-    def test_provider_name_attribute(self):
+class KlingRoutingTests(unittest.TestCase):
+    def test_both_credentials_required_to_enable_kling(self):
+        from app.services.video_provider import DisabledVideoProvider, get_video_provider
+
+        with patch.dict("os.environ", {"KLING_ACCESS_KEY": "a", "KLING_SECRET_KEY": ""}, clear=False):
+            self.assertIsInstance(get_video_provider(), DisabledVideoProvider)
+        with patch.dict("os.environ", {"KLING_ACCESS_KEY": "", "KLING_SECRET_KEY": "b"}, clear=False):
+            self.assertIsInstance(get_video_provider(), DisabledVideoProvider)
+
+    def test_full_credential_pair_selects_kling(self):
         from app.services.kling_provider import KlingProvider
-        self.assertEqual(KlingProvider.name, "kling")
+        from app.services.video_provider import get_video_provider
 
-
-# ---------------------------------------------------------------------------
-# get_video_provider() routing
-# ---------------------------------------------------------------------------
-
-class KlingGetVideoProviderRoutingTests(unittest.TestCase):
-    def test_kling_provider_returned_when_env_key_is_set(self):
-        with patch.dict(os.environ, {"KLING_API_KEY": "some-real-key"}):
-            from importlib import reload
-            import app.services.video_provider as vp
-            reload(vp)
-            provider = vp.get_video_provider()
-        from app.services.kling_provider import KlingProvider
-        self.assertIsInstance(provider, KlingProvider)
-
-    def test_disabled_provider_returned_when_env_key_is_missing(self):
-        env = {k: v for k, v in os.environ.items() if k != "KLING_API_KEY"}
-        with patch.dict(os.environ, env, clear=True):
-            from importlib import reload
-            import app.services.video_provider as vp
-            reload(vp)
-            provider = vp.get_video_provider()
-        from app.services.video_provider import DisabledVideoProvider
-        self.assertIsInstance(provider, DisabledVideoProvider)
+        with patch.dict("os.environ", {"KLING_ACCESS_KEY": "a", "KLING_SECRET_KEY": "b"}, clear=False):
+            self.assertIsInstance(get_video_provider(), KlingProvider)
 
 
 if __name__ == "__main__":
