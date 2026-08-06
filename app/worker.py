@@ -112,11 +112,27 @@ def _maybe_apply_sync(
     if not settings.sync_api_key:
         return video_url
 
+    from app.services.sync_provider import (
+        SyncErrorCategory,
+        apply_lip_sync,
+    )
+
     try:
-        from app.services.sync_provider import apply_lip_sync
         return apply_lip_sync(video_url, audio_url, sleep=sleep)
     except Exception as exc:
-        logger.warning("Sync.so lip-sync failed — keeping Kling video: %s", exc)
+        # Log only a stable sanitized category. str(exc) and exc_info are
+        # never used here: provider bodies, signed URLs and the video/audio
+        # URLs under processing must not reach the log stream.
+        category = getattr(exc, "category", None)
+        if not isinstance(category, str) or not category:
+            category = (
+                SyncErrorCategory.TIMEOUT
+                if isinstance(exc, TimeoutError)
+                else SyncErrorCategory.UNEXPECTED_ERROR
+            )
+        logger.warning(
+            "Sync.so lip-sync failed — keeping Kling video (category=%s)", category
+        )
         return video_url
 
 

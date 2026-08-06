@@ -155,14 +155,16 @@ class CheckSyncJobTests(unittest.TestCase):
         self.assertEqual(result["status"], "pending")
         self.assertEqual(result["output_url"], "")
 
-    def test_failed_status_returns_error(self):
-        from app.services.sync_provider import check_sync_job
+    def test_failed_status_returns_sanitized_category_not_provider_text(self):
+        from app.services.sync_provider import SyncErrorCategory, check_sync_job
         resp = _get_resp(200, {"status": "FAILED", "error": "audio too short"})
         with patch("app.services.sync_provider.httpx.Client",
                    lambda **kw: _FakeHttpClient(resp)):
             result = check_sync_job("job-123")
         self.assertEqual(result["status"], "FAILED")
-        self.assertIn("audio too short", result["error"])
+        self.assertEqual(result["error_category"], SyncErrorCategory.JOB_FAILED)
+        self.assertNotIn("audio too short", result["error"])
+        self.assertNotIn("audio too short", str(result))
 
     def test_error_status_treated_as_failed(self):
         from app.services.sync_provider import check_sync_job
@@ -295,72 +297,48 @@ class CheckSyncConnectionTests(unittest.TestCase):
         self.assertFalse(result["connected"])
         self.assertEqual(result["status"], "not_configured")
 
-    def test_404_probe_confirms_connection(self):
+    def test_configured_key_is_indeterminate_not_connected(self):
         from app.services.sync_provider import check_sync_connection
         settings.sync_api_key = "test-key"
+
+        result = check_sync_connection()
+
+        self.assertFalse(result["connected"])
+        self.assertEqual(result["status"], "indeterminate")
+
+    def test_connection_check_never_claims_connected(self):
+        from app.services.sync_provider import check_sync_connection
+
+        for key in ("", "test-key", "bad-key"):
+            with self.subTest(key=bool(key)):
+                settings.sync_api_key = key
+                result = check_sync_connection()
+                self.assertFalse(result["connected"])
+                self.assertNotEqual(result["status"], "connected")
+
+    def test_fabricated_probe_404_can_no_longer_prove_credentials(self):
+        """A 404 for an invented job ID must never read as a valid key."""
+        from app.services.sync_provider import check_sync_connection
+        settings.sync_api_key = "revoked-key"
         resp = _get_resp(404, {}, job_id="probe-ai-film-os")
 
         with patch("app.services.sync_provider.httpx.Client",
                    lambda **kw: _FakeHttpClient(resp)):
             result = check_sync_connection()
 
-        self.assertTrue(result["connected"])
-        self.assertEqual(result["status"], "connected")
-
-    def test_200_probe_confirms_connection(self):
-        from app.services.sync_provider import check_sync_connection
-        settings.sync_api_key = "test-key"
-        resp = _get_resp(200, {}, job_id="probe-ai-film-os")
-
-        with patch("app.services.sync_provider.httpx.Client",
-                   lambda **kw: _FakeHttpClient(resp)):
-            result = check_sync_connection()
-
-        self.assertTrue(result["connected"])
-
-    def test_401_probe_marks_invalid_key(self):
-        from app.services.sync_provider import check_sync_connection
-        settings.sync_api_key = "bad-key"
-        resp = _get_resp(401, {}, job_id="probe-ai-film-os")
-
-        with patch("app.services.sync_provider.httpx.Client",
-                   lambda **kw: _FakeHttpClient(resp)):
-            result = check_sync_connection()
-
         self.assertFalse(result["connected"])
-        self.assertEqual(result["status"], "invalid_key")
+        self.assertEqual(result["status"], "indeterminate")
 
-    def test_403_probe_marks_invalid_key(self):
-        from app.services.sync_provider import check_sync_connection
-        settings.sync_api_key = "bad-key"
-        resp = _get_resp(403, {}, job_id="probe-ai-film-os")
-
-        with patch("app.services.sync_provider.httpx.Client",
-                   lambda **kw: _FakeHttpClient(resp)):
-            result = check_sync_connection()
-
-        self.assertFalse(result["connected"])
-        self.assertEqual(result["status"], "invalid_key")
-
-    def test_500_returns_provider_error(self):
-        from app.services.sync_provider import check_sync_connection
-        settings.sync_api_key = "test-key"
-        resp = _get_resp(500, {}, job_id="probe-ai-film-os")
-
-        with patch("app.services.sync_provider.httpx.Client",
-                   lambda **kw: _FakeHttpClient(resp)):
-            result = check_sync_connection()
-
-        self.assertFalse(result["connected"])
-        self.assertEqual(result["status"], "provider_error")
-
-    def test_network_error_returns_network_error(self):
+    def test_connection_check_makes_no_network_call(self):
+        """Fail-closed means no probe at all — and no risk of a billable call."""
         from app.services.sync_provider import check_sync_connection
         settings.sync_api_key = "test-key"
 
-        class _NetworkErrorClient:
-            def __init__(self, timeout=None):
-                pass
+        calls = []
+
+        class _ForbiddenClient:
+            def __init__(self, **kwargs):
+                calls.append("constructed")
 
             def __enter__(self):
                 return self
@@ -369,13 +347,17 @@ class CheckSyncConnectionTests(unittest.TestCase):
                 return False
 
             def get(self, url, *, headers=None):
-                raise httpx.ConnectError("connection refused", request=httpx.Request("GET", url))
+                calls.append(url)
+                raise AssertionError("check_sync_connection must not perform HTTP")
 
-        with patch("app.services.sync_provider.httpx.Client", _NetworkErrorClient):
-            result = check_sync_connection()
+            def post(self, url, *, json=None, headers=None):
+                calls.append(url)
+                raise AssertionError("check_sync_connection must not perform HTTP")
 
-        self.assertFalse(result["connected"])
-        self.assertEqual(result["status"], "network_error")
+        with patch("app.services.sync_provider.httpx.Client", _ForbiddenClient):
+            check_sync_connection()
+
+        self.assertEqual(calls, [])
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +424,230 @@ class MaybeApplySyncTests(unittest.TestCase):
             )
 
         self.assertEqual(result, "https://cdn.sync.so/synced.mp4")
+
+
+# ---------------------------------------------------------------------------
+# Sentinel redaction: nothing sensitive may reach exceptions, logs or results
+# ---------------------------------------------------------------------------
+
+# Distinctive sentinels. If any appears in an exception message, a log record
+# or returned failure data, redaction has regressed.
+SENTINEL_API_KEY = "sk-SENTINEL-APIKEY-do-not-leak"
+SENTINEL_VIDEO_URL = "https://cdn.kling.example/SENTINEL-VIDEO.mp4?sig=SENTINELVIDEOSIG"
+SENTINEL_AUDIO_URL = "https://cdn.audio.example/SENTINEL-AUDIO.mp3?sig=SENTINELAUDIOSIG"
+SENTINEL_OUTPUT_URL = "https://cdn.sync.so/SENTINEL-OUTPUT.mp4?sig=SENTINELOUTSIG"
+SENTINEL_BODY = "SENTINEL-PROVIDER-BODY-stack-trace-do-not-print"
+
+_ALL_SENTINELS = (
+    SENTINEL_API_KEY,
+    SENTINEL_VIDEO_URL,
+    SENTINEL_AUDIO_URL,
+    SENTINEL_OUTPUT_URL,
+    SENTINEL_BODY,
+    "SENTINELVIDEOSIG",
+    "SENTINELAUDIOSIG",
+    "sig=",
+)
+
+
+class _SentinelBase(unittest.TestCase):
+    def setUp(self):
+        self._orig_key = settings.sync_api_key
+        self._orig_base = settings.sync_api_base
+        settings.sync_api_key = SENTINEL_API_KEY
+        settings.sync_api_base = "https://api.sync.so"
+
+    def tearDown(self):
+        settings.sync_api_key = self._orig_key
+        settings.sync_api_base = self._orig_base
+
+    def assertNoSentinels(self, text: str, *, allow=()):
+        for sentinel in _ALL_SENTINELS:
+            if sentinel in allow:
+                continue
+            self.assertNotIn(sentinel, text)
+
+
+class SyncExceptionRedactionTests(_SentinelBase):
+    """Raised exceptions must never carry secrets, URLs or provider bodies."""
+
+    def _submit_failure(self, status_code, body):
+        from app.services.sync_provider import submit_sync_job
+
+        resp = _post_resp(status_code, body)
+        with patch("app.services.sync_provider.httpx.Client",
+                   lambda **kw: _FakeHttpClient(resp)):
+            with self.assertRaises(Exception) as captured:
+                submit_sync_job(SENTINEL_VIDEO_URL, SENTINEL_AUDIO_URL)
+        return captured.exception
+
+    def test_provider_error_exception_is_clean(self):
+        exc = self._submit_failure(500, {"error": SENTINEL_BODY})
+        self.assertNoSentinels(str(exc))
+        self.assertIn("500", str(exc))
+
+    def test_invalid_credentials_exception_is_clean(self):
+        exc = self._submit_failure(401, {"error": SENTINEL_BODY})
+        self.assertNoSentinels(str(exc))
+
+    def test_missing_job_id_exception_is_clean(self):
+        exc = self._submit_failure(200, {"message": SENTINEL_BODY})
+        self.assertNoSentinels(str(exc))
+
+    def test_malformed_body_exception_is_clean(self):
+        from app.services.sync_provider import submit_sync_job
+
+        resp = httpx.Response(
+            200,
+            content=f"<html>{SENTINEL_BODY}</html>".encode(),
+            headers={"content-type": "text/html"},
+            request=httpx.Request("POST", "https://api.sync.so/v2/generate"),
+        )
+        with patch("app.services.sync_provider.httpx.Client",
+                   lambda **kw: _FakeHttpClient(resp)):
+            with self.assertRaises(Exception) as captured:
+                submit_sync_job(SENTINEL_VIDEO_URL, SENTINEL_AUDIO_URL)
+        self.assertNoSentinels(str(captured.exception))
+
+    def test_network_error_exception_does_not_leak_request_url(self):
+        from app.services.sync_provider import submit_sync_job
+
+        class _NetworkErrorClient:
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def post(self, url, *, json=None, headers=None):
+                raise httpx.ConnectError(
+                    f"connection refused for {SENTINEL_VIDEO_URL}",
+                    request=httpx.Request("POST", url),
+                )
+
+        with patch("app.services.sync_provider.httpx.Client", _NetworkErrorClient):
+            with self.assertRaises(Exception) as captured:
+                submit_sync_job(SENTINEL_VIDEO_URL, SENTINEL_AUDIO_URL)
+
+        self.assertNoSentinels(str(captured.exception))
+
+    def test_apply_lip_sync_job_failure_exception_is_clean(self):
+        from app.services.sync_provider import apply_lip_sync
+
+        submit = _post_resp(200, {"id": "job-1"})
+        failed = _get_resp(200, {"status": "FAILED", "error": SENTINEL_BODY})
+
+        class _SeqClient:
+            _responses = [submit, failed]
+
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def post(self, url, *, json=None, headers=None):
+                return type(self)._responses[0]
+
+            def get(self, url, *, headers=None):
+                return type(self)._responses[1]
+
+        with patch("app.services.sync_provider.httpx.Client", _SeqClient):
+            with self.assertRaises(Exception) as captured:
+                apply_lip_sync(
+                    SENTINEL_VIDEO_URL, SENTINEL_AUDIO_URL, sleep=lambda _s: None
+                )
+
+        self.assertNoSentinels(str(captured.exception))
+
+    def test_exception_text_is_safe_for_media_jobs_last_error(self):
+        """process_one_job persists str(exc); that string must stay sanitized."""
+        exc = self._submit_failure(500, {"error": SENTINEL_BODY})
+        persisted = str(exc)
+        self.assertNoSentinels(persisted)
+        self.assertNotIn(settings.sync_api_key, persisted)
+
+
+class SyncReturnedDataRedactionTests(_SentinelBase):
+    """Returned failure data must carry only stable categories."""
+
+    def test_failed_result_contains_no_provider_text(self):
+        from app.services.sync_provider import SyncErrorCategory, check_sync_job
+
+        resp = _get_resp(200, {"status": "FAILED", "error": SENTINEL_BODY})
+        with patch("app.services.sync_provider.httpx.Client",
+                   lambda **kw: _FakeHttpClient(resp)):
+            result = check_sync_job("job-1")
+
+        self.assertEqual(result["error_category"], SyncErrorCategory.JOB_FAILED)
+        self.assertNoSentinels(str(result))
+
+    def test_connection_check_result_contains_no_api_key(self):
+        from app.services.sync_provider import check_sync_connection
+
+        result = check_sync_connection()
+        self.assertNoSentinels(str(result))
+
+
+class SyncLogRedactionTests(_SentinelBase):
+    """_maybe_apply_sync must log only a stable sanitized category."""
+
+    def _run_with_failure(self, exc_to_raise):
+        from app.worker import _maybe_apply_sync
+
+        def _boom(video_url, audio_url, **kwargs):
+            raise exc_to_raise
+
+        with patch("app.services.sync_provider.apply_lip_sync", _boom):
+            with self.assertLogs("app.worker", level="WARNING") as captured:
+                result = _maybe_apply_sync(
+                    SENTINEL_VIDEO_URL,
+                    {"audio_mode": "dialogue", "audio_url": SENTINEL_AUDIO_URL},
+                    sleep=lambda _s: None,
+                )
+        return result, "\n".join(captured.output)
+
+    def test_log_records_never_contain_sentinels(self):
+        from app.services.sync_provider import SyncErrorCategory, SyncProviderError
+
+        cases = [
+            SyncProviderError(SyncErrorCategory.PROVIDER_ERROR, status_code=500),
+            SyncProviderError(SyncErrorCategory.NETWORK_ERROR),
+            RuntimeError(f"raw provider text {SENTINEL_BODY} {SENTINEL_VIDEO_URL}"),
+            TimeoutError(f"timed out fetching {SENTINEL_OUTPUT_URL}"),
+        ]
+        for exc in cases:
+            with self.subTest(exc=type(exc).__name__):
+                result, logs = self._run_with_failure(exc)
+                self.assertEqual(result, SENTINEL_VIDEO_URL)  # video preserved
+                self.assertNoSentinels(logs)
+                self.assertIn("category=", logs)
+
+    def test_unexpected_exception_logs_stable_category(self):
+        from app.services.sync_provider import SyncErrorCategory
+
+        _, logs = self._run_with_failure(RuntimeError(SENTINEL_BODY))
+        self.assertIn(SyncErrorCategory.UNEXPECTED_ERROR, logs)
+
+    def test_timeout_logs_timeout_category(self):
+        from app.services.sync_provider import SyncErrorCategory
+
+        _, logs = self._run_with_failure(TimeoutError(SENTINEL_BODY))
+        self.assertIn(SyncErrorCategory.TIMEOUT, logs)
+
+    def test_sanitized_provider_error_logs_its_own_category(self):
+        from app.services.sync_provider import SyncErrorCategory, SyncProviderError
+
+        _, logs = self._run_with_failure(
+            SyncProviderError(SyncErrorCategory.JOB_FAILED)
+        )
+        self.assertIn(SyncErrorCategory.JOB_FAILED, logs)
 
 
 if __name__ == "__main__":
