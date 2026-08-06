@@ -20,8 +20,8 @@ TRANSIENT_PROVIDER_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError
 # Maximum concurrent in-flight provider threads. When timed-out daemon threads
 # remain alive after their deadline (Python cannot forcibly terminate them once
 # blocked in the SDK), this cap bounds the number of leaked threads at any time.
-# Attempts that cannot acquire a slot fail immediately as APIConnectionError,
-# which is treated as a transient error and consumed by the retry budget.
+# Calls that cannot acquire a slot fail immediately as APIConnectionError so
+# the project-scoped caller can retry the same unchanged chunk safely.
 _PROVIDER_SEMAPHORE = threading.Semaphore(4)
 
 
