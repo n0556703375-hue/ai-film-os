@@ -31,9 +31,19 @@ class ProductionScreenplaySmokeWorkflowTests(unittest.TestCase):
         self.assertNotIn("production-smoke-screenplay.txt\n          retention-days", self.workflow)
 
     def test_import_requires_existing_safe_script_flag(self) -> None:
-        self.assertIn("scripts/deployment_import_idempotency.py", self.workflow)
+        self.assertIn("scripts.deployment_import_idempotency", self.workflow)
         self.assertIn("--execute-import", self.workflow)
         self.assertIn("cancel-in-progress: false", self.workflow)
+
+    def test_import_idempotency_is_invoked_as_a_package_module(self) -> None:
+        """Regression test for the ModuleNotFoundError this workflow hit when
+        invoked as `python scripts/deployment_import_idempotency.py` from the
+        repository root: the script imports `from scripts.deployment_smoke
+        import ...`, which only resolves when scripts/ is on sys.path as a
+        package (`python -m scripts.deployment_import_idempotency`), not when
+        Python puts the script's own directory on sys.path[0] instead."""
+        self.assertIn("python -m scripts.deployment_import_idempotency", self.workflow)
+        self.assertNotIn("python scripts/deployment_import_idempotency.py", self.workflow)
 
     def test_preflight_rejects_invalid_project_and_checks_health_first(self) -> None:
         self.assertIn("project_id must be a positive existing project ID", self.workflow)
