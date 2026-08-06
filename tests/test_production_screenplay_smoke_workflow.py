@@ -30,6 +30,18 @@ class ProductionScreenplaySmokeWorkflowTests(unittest.TestCase):
         self.assertIn("rm -f production-smoke-screenplay.txt", self.workflow)
         self.assertNotIn("production-smoke-screenplay.txt\n          retention-days", self.workflow)
 
+    def test_screenplay_secret_supports_the_split_fallback(self) -> None:
+        self.assertIn("secrets.PRODUCTION_SMOKE_SCREENPLAY_B64_PART1", self.workflow)
+        self.assertIn("secrets.PRODUCTION_SMOKE_SCREENPLAY_B64_PART2", self.workflow)
+        self.assertIn(
+            "python -m scripts.materialize_production_screenplay_secret", self.workflow
+        )
+        # The reconstruction/decode logic now lives in a real, unit-tested
+        # module (tests/test_materialize_production_screenplay_secret.py)
+        # instead of an inline heredoc that could only be checked by string
+        # matching the workflow file.
+        self.assertNotIn("base64.b64decode", self.workflow)
+
     def test_import_requires_existing_safe_script_flag(self) -> None:
         self.assertIn("scripts/deployment_import_idempotency.py", self.workflow)
         self.assertIn("--execute-import", self.workflow)

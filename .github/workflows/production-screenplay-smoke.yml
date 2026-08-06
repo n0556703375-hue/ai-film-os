@@ -60,28 +60,14 @@ jobs:
       - name: Materialize screenplay without logging it
         env:
           SCREENPLAY_B64: ${{ secrets.PRODUCTION_SMOKE_SCREENPLAY_B64 }}
+          SCREENPLAY_B64_PART1: ${{ secrets.PRODUCTION_SMOKE_SCREENPLAY_B64_PART1 }}
+          SCREENPLAY_B64_PART2: ${{ secrets.PRODUCTION_SMOKE_SCREENPLAY_B64_PART2 }}
         shell: bash
         run: |
           set -euo pipefail
-          if [ -z "${SCREENPLAY_B64:-}" ]; then
-            echo "Missing required repository secret: PRODUCTION_SMOKE_SCREENPLAY_B64" >&2
-            exit 1
-          fi
           umask 077
-          python - <<'PY'
-          import base64
-          import os
-          from pathlib import Path
-
-          encoded = os.environ["SCREENPLAY_B64"]
-          try:
-              screenplay = base64.b64decode(encoded, validate=True)
-          except Exception as exc:
-              raise SystemExit(f"PRODUCTION_SMOKE_SCREENPLAY_B64 is not valid base64: {exc}")
-          if not screenplay.strip():
-              raise SystemExit("Decoded screenplay is empty")
-          Path("production-smoke-screenplay.txt").write_bytes(screenplay)
-          PY
+          python -m scripts.materialize_production_screenplay_secret \
+            --output production-smoke-screenplay.txt
 
       - name: Verify deployed import idempotency
         shell: bash
