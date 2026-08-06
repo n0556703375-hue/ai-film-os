@@ -36,6 +36,15 @@ def _get_resp(status_code: int, body: dict, job_id: str = "job-123") -> httpx.Re
     )
 
 
+def _models_resp(status_code: int, body) -> httpx.Response:
+    return httpx.Response(
+        status_code,
+        content=json.dumps(body).encode(),
+        headers={"content-type": "application/json"},
+        request=httpx.Request("GET", "https://api.sync.so/v2/models"),
+    )
+
+
 class _FakeHttpClient:
     def __init__(self, response: httpx.Response, timeout=None):
         self._response = response
@@ -61,12 +70,15 @@ class SubmitSyncJobTests(unittest.TestCase):
     def setUp(self):
         self._orig_key = settings.sync_api_key
         self._orig_base = settings.sync_api_base
+        self._orig_model = settings.sync_default_model
         settings.sync_api_key = "test-sync-key"
         settings.sync_api_base = "https://api.sync.so"
+        settings.sync_default_model = "sync-3"
 
     def tearDown(self):
         settings.sync_api_key = self._orig_key
         settings.sync_api_base = self._orig_base
+        settings.sync_default_model = self._orig_model
 
     def test_missing_key_raises_not_configured(self):
         from app.services.sync_provider import SyncProviderNotConfigured, submit_sync_job
@@ -74,21 +86,71 @@ class SubmitSyncJobTests(unittest.TestCase):
         with self.assertRaises(SyncProviderNotConfigured):
             submit_sync_job("https://video.example.com/v.mp4", "https://audio.example.com/a.mp3")
 
-    def test_successful_submit_returns_job_id(self):
+    def test_documented_default_model_is_sync_3(self):
+        from app.core.config import SYNC_FALLBACK_MODEL
+
+        self.assertEqual(SYNC_FALLBACK_MODEL, "sync-3")
+
+    def test_successful_submit_matches_official_contract(self):
         from app.services.sync_provider import submit_sync_job
-        resp = _post_resp(202, {"id": "job-abc"})
+        resp = _post_resp(201, {"id": "job-abc", "status": "PENDING"})
+        captured = {}
+
+        class _CaptureClient(_FakeHttpClient):
+            def post(self, url, *, json=None, headers=None):
+                captured.update(url=url, json=json, headers=headers)
+                return self._response
+
         with patch("app.services.sync_provider.httpx.Client",
-                   lambda **kw: _FakeHttpClient(resp)):
+                   lambda **kw: _CaptureClient(resp)):
             job_id = submit_sync_job("https://v.example.com/v.mp4", "https://a.example.com/a.mp3")
         self.assertEqual(job_id, "job-abc")
+        self.assertEqual(captured["url"], "https://api.sync.so/v2/generate")
+        self.assertEqual(captured["headers"]["x-api-key"], "test-sync-key")
+        self.assertEqual(
+            captured["json"],
+            {
+                "model": "sync-3",
+                "input": [
+                    {"type": "video", "url": "https://v.example.com/v.mp4"},
+                    {"type": "audio", "url": "https://a.example.com/a.mp3"},
+                ],
+            },
+        )
+        self.assertNotIn("options", captured["json"])
 
-    def test_job_id_field_alternative_accepted(self):
-        from app.services.sync_provider import submit_sync_job
-        resp = _post_resp(200, {"job_id": "job-alt"})
+    def test_undocumented_job_id_field_is_rejected(self):
+        from app.services.sync_provider import SyncErrorCategory, SyncProviderError, submit_sync_job
+        resp = _post_resp(201, {"job_id": "job-alt"})
         with patch("app.services.sync_provider.httpx.Client",
                    lambda **kw: _FakeHttpClient(resp)):
-            job_id = submit_sync_job("https://v.example.com/v.mp4", "https://a.example.com/a.mp3")
-        self.assertEqual(job_id, "job-alt")
+            with self.assertRaises(SyncProviderError) as captured:
+                submit_sync_job("https://v.example.com/v.mp4", "https://a.example.com/a.mp3")
+        self.assertEqual(captured.exception.category, SyncErrorCategory.MISSING_JOB_ID)
+
+    def test_supported_explicit_model_is_accepted(self):
+        from app.services.sync_provider import submit_sync_job
+        resp = _post_resp(201, {"id": "job-pro"})
+        captured = {}
+
+        class _CaptureClient(_FakeHttpClient):
+            def post(self, url, *, json=None, headers=None):
+                captured["json"] = json
+                return self._response
+
+        with patch("app.services.sync_provider.httpx.Client",
+                   lambda **kw: _CaptureClient(resp)):
+            submit_sync_job("https://v.example.com/v.mp4", "https://a.example.com/a.mp3", "lipsync-2-pro")
+        self.assertEqual(captured["json"]["model"], "lipsync-2-pro")
+
+    def test_undocumented_model_fails_before_http(self):
+        from app.services.sync_provider import SyncErrorCategory, SyncProviderError, submit_sync_job
+        client = Mock()
+        with patch("app.services.sync_provider.httpx.Client", client):
+            with self.assertRaises(SyncProviderError) as captured:
+                submit_sync_job("https://v.example.com/v.mp4", "https://a.example.com/a.mp3", "sync-2")
+        self.assertEqual(captured.exception.category, SyncErrorCategory.INVALID_MODEL)
+        client.assert_not_called()
 
     def test_401_raises_not_configured(self):
         from app.services.sync_provider import SyncProviderNotConfigured, submit_sync_job
@@ -108,7 +170,7 @@ class SubmitSyncJobTests(unittest.TestCase):
 
     def test_missing_job_id_in_response_raises(self):
         from app.services.sync_provider import submit_sync_job
-        resp = _post_resp(202, {})
+        resp = _post_resp(201, {})
         with patch("app.services.sync_provider.httpx.Client",
                    lambda **kw: _FakeHttpClient(resp)):
             with self.assertRaises(RuntimeError):
@@ -139,13 +201,14 @@ class CheckSyncJobTests(unittest.TestCase):
         self.assertEqual(result["status"], "COMPLETED")
         self.assertEqual(result["output_url"], "https://cdn.sync.so/out.mp4")
 
-    def test_completed_with_snake_case_field(self):
-        from app.services.sync_provider import check_sync_job
+    def test_undocumented_snake_case_output_field_is_rejected(self):
+        from app.services.sync_provider import SyncErrorCategory, SyncProviderError, check_sync_job
         resp = _get_resp(200, {"status": "COMPLETED", "output_url": "https://cdn.sync.so/out2.mp4"})
         with patch("app.services.sync_provider.httpx.Client",
                    lambda **kw: _FakeHttpClient(resp)):
-            result = check_sync_job("job-123")
-        self.assertEqual(result["output_url"], "https://cdn.sync.so/out2.mp4")
+            with self.assertRaises(SyncProviderError) as captured:
+                check_sync_job("job-123")
+        self.assertEqual(captured.exception.category, SyncErrorCategory.MISSING_OUTPUT_URL)
 
     def test_pending_status_returns_pending(self):
         from app.services.sync_provider import check_sync_job
@@ -167,13 +230,31 @@ class CheckSyncJobTests(unittest.TestCase):
         self.assertNotIn("audio too short", result["error"])
         self.assertNotIn("audio too short", str(result))
 
-    def test_error_status_treated_as_failed(self):
+    def test_rejected_status_treated_as_failed(self):
         from app.services.sync_provider import check_sync_job
-        resp = _get_resp(200, {"status": "ERROR", "error": "server crash"})
+        resp = _get_resp(200, {"status": "REJECTED", "error": "policy"})
         with patch("app.services.sync_provider.httpx.Client",
                    lambda **kw: _FakeHttpClient(resp)):
             result = check_sync_job("job-123")
         self.assertEqual(result["status"], "FAILED")
+
+    def test_undocumented_status_fails_closed(self):
+        from app.services.sync_provider import SyncErrorCategory, SyncProviderError, check_sync_job
+        resp = _get_resp(200, {"status": "ERROR", "error": "server crash"})
+        with patch("app.services.sync_provider.httpx.Client",
+                   lambda **kw: _FakeHttpClient(resp)):
+            with self.assertRaises(SyncProviderError) as captured:
+                check_sync_job("job-123")
+        self.assertEqual(captured.exception.category, SyncErrorCategory.UNKNOWN_STATUS)
+
+    def test_missing_key_fails_before_http(self):
+        from app.services.sync_provider import SyncProviderNotConfigured, check_sync_job
+        settings.sync_api_key = ""
+        client = Mock()
+        with patch("app.services.sync_provider.httpx.Client", client):
+            with self.assertRaises(SyncProviderNotConfigured):
+                check_sync_job("job-123")
+        client.assert_not_called()
 
     def test_non_200_response_raises_runtime_error(self):
         from app.services.sync_provider import check_sync_job
@@ -210,7 +291,7 @@ class ApplyLipSyncTests(unittest.TestCase):
     def test_successful_sync_returns_synced_url(self):
         from app.services.sync_provider import apply_lip_sync
 
-        submit_resp = _post_resp(202, {"id": "job-sync-1"})
+        submit_resp = _post_resp(201, {"id": "job-sync-1"})
         poll_resp = _get_resp(200, {"status": "COMPLETED", "outputUrl": "https://cdn.sync.so/synced.mp4"})
 
         class _TwoPhaseClient:
@@ -243,7 +324,7 @@ class ApplyLipSyncTests(unittest.TestCase):
     def test_failed_job_raises_runtime_error(self):
         from app.services.sync_provider import apply_lip_sync
 
-        submit_resp = _post_resp(202, {"id": "job-fail"})
+        submit_resp = _post_resp(201, {"id": "job-fail"})
         poll_resp = _get_resp(200, {"status": "FAILED", "error": "mismatch"})
 
         class _FailClient:
@@ -294,52 +375,77 @@ class CheckSyncConnectionTests(unittest.TestCase):
     def test_missing_key_returns_not_configured(self):
         from app.services.sync_provider import check_sync_connection
         settings.sync_api_key = ""
-        result = check_sync_connection()
+        client = Mock()
+        with patch("app.services.sync_provider.httpx.Client", client):
+            result = check_sync_connection()
         self.assertFalse(result["connected"])
         self.assertEqual(result["status"], "not_configured")
+        client.assert_not_called()
 
-    def test_configured_key_is_indeterminate_not_connected(self):
+    def test_documented_models_endpoint_proves_connection(self):
         from app.services.sync_provider import check_sync_connection
         settings.sync_api_key = "test-key"
+        resp = _models_resp(200, [{"id": "sync-3"}, {"id": "lipsync-2"}])
+        captured = {}
 
-        result = check_sync_connection()
+        class _CaptureClient(_FakeHttpClient):
+            def get(self, url, *, headers=None):
+                captured.update(url=url, headers=headers)
+                return self._response
 
-        self.assertFalse(result["connected"])
-        self.assertEqual(result["status"], "indeterminate")
+        with patch("app.services.sync_provider.httpx.Client",
+                   lambda **kw: _CaptureClient(resp)):
+            result = check_sync_connection()
 
-    def test_connection_check_never_claims_connected(self):
+        self.assertTrue(result["connected"])
+        self.assertEqual(result["status"], "connected")
+        self.assertEqual(captured["url"], "https://api.sync.so/v2/models")
+        self.assertEqual(captured["headers"]["x-api-key"], "test-key")
+
+    def test_invalid_credentials_are_rejected_without_body_leakage(self):
         from app.services.sync_provider import check_sync_connection
-
-        for key in ("", "test-key", "bad-key"):
-            with self.subTest(key=bool(key)):
-                settings.sync_api_key = key
-                result = check_sync_connection()
-                self.assertFalse(result["connected"])
-                self.assertNotEqual(result["status"], "connected")
-
-    def test_fabricated_probe_404_can_no_longer_prove_credentials(self):
-        """A 404 for an invented job ID must never read as a valid key."""
-        from app.services.sync_provider import check_sync_connection
-        settings.sync_api_key = "revoked-key"
-        resp = _get_resp(404, {}, job_id="probe-ai-film-os")
-
+        settings.sync_api_key = "bad-key"
+        resp = _models_resp(401, {"error": "secret provider detail"})
         with patch("app.services.sync_provider.httpx.Client",
                    lambda **kw: _FakeHttpClient(resp)):
             result = check_sync_connection()
-
         self.assertFalse(result["connected"])
-        self.assertEqual(result["status"], "indeterminate")
+        self.assertEqual(result["status"], "invalid_credentials")
+        self.assertNotIn("secret provider detail", str(result))
 
-    def test_connection_check_makes_no_network_call(self):
-        """Fail-closed means no probe at all — and no risk of a billable call."""
+    def test_provider_and_malformed_responses_fail_closed(self):
+        from app.services.sync_provider import check_sync_connection
+        settings.sync_api_key = "test-key"
+        cases = [
+            _models_resp(500, {"error": "secret provider detail"}),
+            _models_resp(200, {"models": [{"id": "sync-3"}]}),
+        ]
+        for resp in cases:
+            with self.subTest(status=resp.status_code):
+                with patch("app.services.sync_provider.httpx.Client",
+                           lambda **kw: _FakeHttpClient(resp)):
+                    result = check_sync_connection()
+                self.assertFalse(result["connected"])
+                self.assertEqual(result["status"], "indeterminate")
+                self.assertNotIn("secret provider detail", str(result))
+
+    def test_account_without_supported_model_is_not_ready(self):
+        from app.services.sync_provider import check_sync_connection
+        settings.sync_api_key = "test-key"
+        resp = _models_resp(200, [{"id": "react-1"}])
+        with patch("app.services.sync_provider.httpx.Client",
+                   lambda **kw: _FakeHttpClient(resp)):
+            result = check_sync_connection()
+        self.assertFalse(result["connected"])
+        self.assertEqual(result["status"], "unsupported_models")
+
+    def test_network_error_is_indeterminate_and_sanitized(self):
         from app.services.sync_provider import check_sync_connection
         settings.sync_api_key = "test-key"
 
-        calls = []
-
-        class _ForbiddenClient:
+        class _NetworkClient:
             def __init__(self, **kwargs):
-                calls.append("constructed")
+                pass
 
             def __enter__(self):
                 return self
@@ -348,17 +454,38 @@ class CheckSyncConnectionTests(unittest.TestCase):
                 return False
 
             def get(self, url, *, headers=None):
-                calls.append(url)
-                raise AssertionError("check_sync_connection must not perform HTTP")
+                raise httpx.ConnectError(
+                    "request exposed https://signed.example/private?token=secret",
+                    request=httpx.Request("GET", url),
+                )
+
+        with patch("app.services.sync_provider.httpx.Client", _NetworkClient):
+            result = check_sync_connection()
+        self.assertFalse(result["connected"])
+        self.assertEqual(result["status"], "indeterminate")
+        self.assertNotIn("signed.example", str(result))
+        self.assertNotIn("secret", str(result))
+
+    def test_connection_check_is_read_only_and_never_probes_a_job(self):
+        from app.services.sync_provider import check_sync_connection
+        settings.sync_api_key = "test-key"
+        calls = []
+        resp = _models_resp(200, [{"id": "sync-3"}])
+
+        class _ReadOnlyClient(_FakeHttpClient):
+            def get(self, url, *, headers=None):
+                calls.append(("GET", url))
+                return self._response
 
             def post(self, url, *, json=None, headers=None):
-                calls.append(url)
-                raise AssertionError("check_sync_connection must not perform HTTP")
+                calls.append(("POST", url))
+                raise AssertionError("connection check must never POST")
 
-        with patch("app.services.sync_provider.httpx.Client", _ForbiddenClient):
-            check_sync_connection()
-
-        self.assertEqual(calls, [])
+        with patch("app.services.sync_provider.httpx.Client",
+                   lambda **kw: _ReadOnlyClient(resp)):
+            result = check_sync_connection()
+        self.assertTrue(result["connected"])
+        self.assertEqual(calls, [("GET", "https://api.sync.so/v2/models")])
 
 
 # ---------------------------------------------------------------------------

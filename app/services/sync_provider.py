@@ -30,6 +30,9 @@ from app.core.config import settings
 
 _POLL_INTERVAL = 8
 _MAX_POLLS = 90
+SYNC_SUPPORTED_MODELS = frozenset(
+    {"sync-3", "lipsync-2", "lipsync-2-pro", "lipsync-1.9.0-beta"}
+)
 
 
 class SyncErrorCategory:
@@ -43,6 +46,8 @@ class SyncErrorCategory:
     MISSING_JOB_ID = "missing_job_id"
     MISSING_OUTPUT_URL = "missing_output_url"
     JOB_FAILED = "job_failed"
+    INVALID_MODEL = "invalid_model"
+    UNKNOWN_STATUS = "unknown_status"
     TIMEOUT = "timeout"
     UNEXPECTED_ERROR = "unexpected_error"
 
@@ -86,6 +91,13 @@ def _require_key() -> None:
         )
 
 
+def _resolve_model(model: str | None) -> str:
+    selected = model if model is not None else settings.sync_default_model
+    if selected not in SYNC_SUPPORTED_MODELS:
+        raise SyncProviderError(SyncErrorCategory.INVALID_MODEL)
+    return selected
+
+
 def _json_or_error(resp: httpx.Response) -> dict:
     """Parse a JSON object, never echoing the body on failure."""
     try:
@@ -101,20 +113,20 @@ def _json_or_error(resp: httpx.Response) -> dict:
     return body
 
 
-def _guard_status(resp: httpx.Response) -> None:
+def _guard_status(resp: httpx.Response, expected_statuses: set[int]) -> None:
     """Translate HTTP status into sanitized exceptions."""
     if resp.status_code in {401, 403}:
         raise SyncProviderNotConfigured(
             "Sync.so דחה את מפתח ה-API. יש לעדכן את SYNC_API_KEY.",
             category=SyncErrorCategory.INVALID_CREDENTIALS,
         )
-    if resp.status_code not in {200, 201, 202}:
+    if resp.status_code not in expected_statuses:
         raise SyncProviderError(
             SyncErrorCategory.PROVIDER_ERROR, status_code=resp.status_code
         )
 
 
-def submit_sync_job(video_url: str, audio_url: str, model: str = "sync-2") -> str:
+def submit_sync_job(video_url: str, audio_url: str, model: str | None = None) -> str:
     """POST to Sync.so, return job_id immediately — no polling, no sleep.
 
     Args:
@@ -126,17 +138,14 @@ def submit_sync_job(video_url: str, audio_url: str, model: str = "sync-2") -> st
         Sync.so job_id.
     """
     _require_key()
+    selected_model = _resolve_model(model)
 
     payload = {
-        "model": model,
+        "model": selected_model,
         "input": [
             {"type": "video", "url": video_url},
             {"type": "audio", "url": audio_url},
         ],
-        "options": {
-            "output_format": "mp4",
-            "sync_mode": "bounce",
-        },
     }
 
     url = f"{settings.sync_api_base}/v2/generate"
@@ -147,9 +156,9 @@ def submit_sync_job(video_url: str, audio_url: str, model: str = "sync-2") -> st
         # httpx errors stringify with the full request URL — never propagate them.
         raise SyncProviderError(SyncErrorCategory.NETWORK_ERROR) from exc
 
-    _guard_status(resp)
+    _guard_status(resp, {201})
     body = _json_or_error(resp)
-    job_id = body.get("id") or body.get("job_id")
+    job_id = body.get("id")
     if not job_id or not isinstance(job_id, str):
         raise SyncProviderError(SyncErrorCategory.MISSING_JOB_ID)
     return job_id
@@ -167,6 +176,7 @@ def check_sync_job(job_id: str) -> dict:
     ``error``/``error_category`` carry only a stable category — never the
     provider's free-text failure message.
     """
+    _require_key()
     url = f"{settings.sync_api_base}/v2/generate/{job_id}"
     try:
         with httpx.Client(timeout=20.0) as client:
@@ -174,12 +184,12 @@ def check_sync_job(job_id: str) -> dict:
     except httpx.RequestError as exc:
         raise SyncProviderError(SyncErrorCategory.NETWORK_ERROR) from exc
 
-    _guard_status(resp)
+    _guard_status(resp, {200})
     data = _json_or_error(resp)
     status = data.get("status", "")
 
     if status == "COMPLETED":
-        output_url = data.get("outputUrl") or data.get("output_url") or ""
+        output_url = data.get("outputUrl") or ""
         if not output_url or not isinstance(output_url, str):
             raise SyncProviderError(SyncErrorCategory.MISSING_OUTPUT_URL)
         return {
@@ -188,7 +198,7 @@ def check_sync_job(job_id: str) -> dict:
             "error_category": "",
             "error": "",
         }
-    if status in {"FAILED", "ERROR"}:
+    if status in {"FAILED", "REJECTED"}:
         # data["error"] is provider free text and is deliberately dropped.
         return {
             "status": "FAILED",
@@ -196,13 +206,20 @@ def check_sync_job(job_id: str) -> dict:
             "error_category": SyncErrorCategory.JOB_FAILED,
             "error": SyncErrorCategory.JOB_FAILED,
         }
-    return {"status": "pending", "output_url": "", "error_category": "", "error": ""}
+    if status in {"PENDING", "PROCESSING"}:
+        return {
+            "status": "pending",
+            "output_url": "",
+            "error_category": "",
+            "error": "",
+        }
+    raise SyncProviderError(SyncErrorCategory.UNKNOWN_STATUS)
 
 
 def apply_lip_sync(
     video_url: str,
     audio_url: str,
-    model: str = "sync-2",
+    model: str | None = None,
     *,
     sleep: Callable[[float], None] = time.sleep,
 ) -> str:
@@ -230,18 +247,9 @@ def apply_lip_sync(
 def check_sync_connection() -> dict:
     """Report whether Sync.so credentials can be proven valid.
 
-    Fails closed. The previous implementation probed a fabricated job ID and
-    treated a 404 as proof of a working key, which reports success for an
-    invalid or revoked key — any unauthenticated 404 looks identical.
-
-    Sync.so's current public documentation does not expose a verified
-    authenticated, non-billable endpoint suitable for credential validation,
-    so this function performs no network call and never claims a working
-    connection. It returns ``indeterminate`` whenever a key is present.
-
-    To restore a real check, confirm an authenticated GET endpoint in the
-    official API reference, then treat only 2xx as connected and 401/403 as
-    invalid_key. Do not reintroduce a fabricated-resource probe.
+    Uses the documented, authenticated and non-billable ``GET /v2/models``
+    endpoint. Only a valid JSON model list containing a supported lip-sync
+    model proves that the configured account can use this adapter.
     """
     if not settings.sync_api_key:
         return {
@@ -249,11 +257,54 @@ def check_sync_connection() -> dict:
             "status": SyncErrorCategory.NOT_CONFIGURED,
             "message": "SYNC_API_KEY אינו מוגדר.",
         }
+    url = f"{settings.sync_api_base}/v2/models"
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.get(url, headers=_headers())
+    except httpx.RequestError:
+        return {
+            "connected": False,
+            "status": "indeterminate",
+            "message": "לא ניתן להשלים כרגע את בדיקת החיבור ל-Sync.so.",
+        }
+
+    if resp.status_code in {401, 403}:
+        return {
+            "connected": False,
+            "status": SyncErrorCategory.INVALID_CREDENTIALS,
+            "message": "Sync.so דחה את מפתח ה-API.",
+        }
+    if resp.status_code != 200:
+        return {
+            "connected": False,
+            "status": "indeterminate",
+            "message": "Sync.so לא השלים את בדיקת החיבור.",
+        }
+
+    try:
+        models = resp.json()
+    except Exception:
+        models = None
+    if not isinstance(models, list):
+        return {
+            "connected": False,
+            "status": "indeterminate",
+            "message": "Sync.so החזיר תגובת חיבור לא תקינה.",
+        }
+
+    available = {
+        item.get("id")
+        for item in models
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    if not available.intersection(SYNC_SUPPORTED_MODELS):
+        return {
+            "connected": False,
+            "status": "unsupported_models",
+            "message": "החשבון מחובר אך אינו מציג מודל lip-sync נתמך.",
+        }
     return {
-        "connected": False,
-        "status": "indeterminate",
-        "message": (
-            "לא ניתן לאמת את מפתח Sync.so ללא endpoint מאומת ומתועד. "
-            "המפתח מוגדר, אך תקינותו לא הוכחה."
-        ),
+        "connected": True,
+        "status": "connected",
+        "message": "Sync.so מחובר ומוכן.",
     }

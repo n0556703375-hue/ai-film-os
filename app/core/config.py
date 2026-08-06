@@ -8,6 +8,8 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 # so callers and tests can assert the default without reloading this module.
 KLING_DEFAULT_API_BASE = "https://api-singapore.klingai.com"
 KLING_FALLBACK_MODEL = "kling-v2-master"
+SYNC_DEFAULT_API_BASE = "https://api.sync.so"
+SYNC_FALLBACK_MODEL = "sync-3"
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -41,7 +43,8 @@ class Settings:
     kling_api_base = os.getenv("KLING_API_BASE", KLING_DEFAULT_API_BASE).rstrip("/")
     kling_default_model = os.getenv("KLING_DEFAULT_MODEL", KLING_FALLBACK_MODEL)
     sync_api_key = os.getenv("SYNC_API_KEY", "").strip()
-    sync_api_base = os.getenv("SYNC_API_BASE", "https://api.sync.so").rstrip("/")
+    sync_api_base = os.getenv("SYNC_API_BASE", SYNC_DEFAULT_API_BASE).rstrip("/")
+    sync_default_model = os.getenv("SYNC_DEFAULT_MODEL", SYNC_FALLBACK_MODEL).strip()
 
 
 settings = Settings()
