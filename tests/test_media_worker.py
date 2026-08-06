@@ -6,7 +6,11 @@ from unittest.mock import Mock, patch
 from app.core.config import settings
 from app.database.connection import init_db
 from app.repositories import jobs, projects, scenes, shots
-from app.services.video_provider import VideoGenerationResult
+from app.services.generation import GenerationNotConfigured
+from app.services.video_provider import (
+    VideoGenerationResult,
+    VideoProviderNotConfigured,
+)
 from app.worker import process_one_job
 
 
@@ -96,7 +100,51 @@ class MediaWorkerTests(unittest.TestCase):
 
         self.assertEqual(failed["status"], "failed")
         self.assertEqual(failed["attempts"], 1)
-        self.assertIn("לאשר תמונת שוט", failed["last_error"])
+        self.assertEqual(failed["last_error"], "invalid_job")
+
+    def test_worker_persists_only_fixed_sanitized_failure_categories(self):
+        sentinel = (
+            "https://signed.example/private?token=SECRET "
+            "prompt=SENSITIVE_PROMPT api_key=SECRET_KEY"
+        )
+        cases = [
+            (GenerationNotConfigured(sentinel), "image_provider_not_configured", False),
+            (VideoProviderNotConfigured(sentinel), "video_provider_not_configured", False),
+            (ValueError(sentinel), "invalid_job", False),
+            (TimeoutError(sentinel), "provider_timeout", True),
+            (ConnectionError(sentinel), "provider_connection", True),
+            (RuntimeError(sentinel), "provider_failure", True),
+        ]
+
+        for index, (failure, expected_category, retryable) in enumerate(cases):
+            with self.subTest(failure_type=type(failure).__name__):
+                jobs.enqueue_job(
+                    self.project_id,
+                    self.shot["id"],
+                    "image",
+                    {},
+                    f"worker-sanitized-failure-{index}",
+                    max_attempts=2,
+                )
+                with patch("app.worker._process_image_job", side_effect=failure):
+                    failed = process_one_job("test-worker")
+
+                self.assertEqual(failed["last_error"], expected_category)
+                self.assertNotIn("SECRET", failed["last_error"])
+                self.assertNotIn("SENSITIVE_PROMPT", failed["last_error"])
+                self.assertNotIn("signed.example", failed["last_error"])
+                self.assertEqual(
+                    failed["status"],
+                    "retrying" if retryable else "failed",
+                )
+                if retryable:
+                    # Exhaust this job so it cannot be claimed by the next
+                    # subtest; the persisted category must stay sanitized on
+                    # the terminal attempt too.
+                    with patch("app.worker._process_image_job", side_effect=failure):
+                        exhausted = process_one_job("test-worker")
+                    self.assertEqual(exhausted["status"], "failed")
+                    self.assertEqual(exhausted["last_error"], expected_category)
 
     @patch("app.worker.get_video_provider")
     def test_video_job_uses_provider_contract_and_creates_media(self, get_provider):
