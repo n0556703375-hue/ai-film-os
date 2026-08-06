@@ -8,9 +8,11 @@ from openai import APIConnectionError, APITimeoutError
 
 import app.services.screenplay_breakdown as _breakdown_module
 from app.services.screenplay_breakdown import (
+    MAX_CHUNK_CHARACTERS,
     MAX_PROVIDER_ATTEMPTS,
     PROVIDER_TIMEOUT_SECONDS,
     _request_breakdown,
+    _split_screenplay,
 )
 
 # Tiny timeout used in deadline tests so they run fast and daemon threads
@@ -246,6 +248,25 @@ class ScreenplayBreakdownRetryTests(unittest.TestCase):
         finally:
             for _ in range(held):
                 _breakdown_module._PROVIDER_SEMAPHORE.release()
+
+
+    # --- Production-sized chunk boundary tests ---
+
+    def test_default_chunks_stay_within_reduced_provider_budget(self):
+        screenplay = ("א" * 2400) + "\n\n" + ("ב" * 2400)
+        chunks = _split_screenplay(screenplay)
+
+        self.assertEqual(MAX_CHUNK_CHARACTERS, 3000)
+        self.assertTrue(chunks)
+        self.assertTrue(all(len(chunk) <= MAX_CHUNK_CHARACTERS for chunk in chunks))
+        self.assertEqual("\n\n".join(chunks), screenplay)
+
+    def test_oversized_paragraph_is_split_without_content_loss(self):
+        screenplay = "ג" * (MAX_CHUNK_CHARACTERS * 2 + 17)
+        chunks = _split_screenplay(screenplay)
+
+        self.assertEqual([len(chunk) for chunk in chunks], [3000, 3000, 17])
+        self.assertEqual("".join(chunks), screenplay)
 
 
 if __name__ == "__main__":

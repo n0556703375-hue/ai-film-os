@@ -35,7 +35,7 @@ class ScreenplayBreakdownChunkingTests(unittest.TestCase):
 
         chunks = _split_screenplay(screenplay)
 
-        self.assertEqual(MAX_CHUNK_CHARACTERS, 6000)
+        self.assertEqual(MAX_CHUNK_CHARACTERS, 3000)
         self.assertGreater(len(chunks), 1)
         self.assertTrue(all(len(chunk) <= 6000 for chunk in chunks))
         self.assertEqual("\n\n".join(chunks), screenplay)
