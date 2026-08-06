@@ -1,5 +1,6 @@
 import json
 import re
+import threading
 
 from openai import APIConnectionError, APITimeoutError, RateLimitError
 
@@ -14,6 +15,13 @@ MAX_CHUNK_CHARACTERS = 6000
 PROVIDER_TIMEOUT_SECONDS = 18.0
 MAX_PROVIDER_ATTEMPTS = 2
 TRANSIENT_PROVIDER_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError)
+
+# Maximum concurrent in-flight provider threads. When timed-out daemon threads
+# remain alive after their deadline (Python cannot forcibly terminate them once
+# blocked in the SDK), this cap bounds the number of leaked threads at any time.
+# Attempts that cannot acquire a slot fail immediately as APIConnectionError,
+# which is treated as a transient error and consumed by the retry budget.
+_PROVIDER_SEMAPHORE = threading.Semaphore(4)
 
 
 def _split_screenplay(screenplay: str, max_characters: int = MAX_CHUNK_CHARACTERS) -> list[str]:
@@ -71,15 +79,69 @@ def _extract_json_array(raw: str) -> list[dict]:
 
 
 def _request_breakdown(prompt: str):
-    """Retry only transient provider errors while keeping the total call bounded."""
+    """Retry only transient provider errors while keeping the total call bounded.
+
+    Enforces an independent app-level deadline using daemon threads to ensure
+    control returns even if the provider SDK's timeout parameter is unreliable.
+    The timeout path raises APITimeoutError, which flows through the retry logic.
+
+    A module-level semaphore caps concurrent in-flight provider threads. Timed-out
+    daemon threads cannot be forcibly terminated by Python once they are blocked
+    inside the SDK, but the semaphore prevents unbounded accumulation of leaked
+    threads. Attempts that cannot acquire a slot fail immediately as
+    APIConnectionError (treated as transient) and are consumed by the retry budget.
+
+    Known limitation: Python cannot forcibly terminate a thread already blocked in
+    the SDK. The semaphore bounds the count of such threads; it does not eliminate
+    them.
+    """
     client = _openai_client()
     for attempt in range(1, MAX_PROVIDER_ATTEMPTS + 1):
         try:
-            return client.responses.create(
-                model=settings.openai_text_model,
-                input=prompt,
-                timeout=PROVIDER_TIMEOUT_SECONDS,
+            if not _PROVIDER_SEMAPHORE.acquire(blocking=False):
+                raise APIConnectionError(
+                    request=None,
+                    message="Concurrent provider thread capacity exceeded",
+                )
+
+            result_container: dict = {}
+            exception_container: dict = {}
+
+            def call_provider(
+                _result=result_container,
+                _exc=exception_container,
+            ):
+                try:
+                    _result['result'] = client.responses.create(
+                        model=settings.openai_text_model,
+                        input=prompt,
+                        timeout=PROVIDER_TIMEOUT_SECONDS,
+                    )
+                except Exception as e:
+                    _exc['exception'] = e
+                finally:
+                    _PROVIDER_SEMAPHORE.release()
+
+            thread = threading.Thread(
+                target=call_provider,
+                daemon=True,
+                name=f"provider_deadline_attempt_{attempt}",
             )
+            thread.start()
+            thread.join(timeout=PROVIDER_TIMEOUT_SECONDS)
+
+            if thread.is_alive():
+                # Thread is still blocking in the SDK. The semaphore slot will be
+                # released by the daemon thread's finally block when the SDK call
+                # eventually returns or the process exits. Bounded accumulation is
+                # enforced by _PROVIDER_SEMAPHORE's capacity.
+                raise APITimeoutError("Provider request exceeded application deadline")
+
+            if exception_container:
+                raise exception_container['exception']
+
+            return result_container['result']
+
         except TRANSIENT_PROVIDER_ERRORS:
             if attempt == MAX_PROVIDER_ATTEMPTS:
                 raise
