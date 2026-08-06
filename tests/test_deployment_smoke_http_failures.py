@@ -124,6 +124,29 @@ class DeploymentSmokeHttpFailureTests(unittest.TestCase):
         self.assertNotIsInstance(captured.exception, RetryableChunkFailure)
 
     @patch("scripts.deployment_smoke.urlopen")
+    def test_non_boolean_retryable_values_are_not_retryable(self, urlopen):
+        for encoded_value in ('"true"', '"false"', "1", "null"):
+            with self.subTest(retryable=encoded_value):
+                body = ('{"detail":{"retryable":' + encoded_value + "}}").encode("utf-8")
+                urlopen.side_effect = HTTPError(
+                    url="https://example.invalid/api/import-runs/process-next",
+                    code=502,
+                    msg="Bad Gateway",
+                    hdrs={"Content-Type": "application/json"},
+                    fp=io.BytesIO(body),
+                )
+
+                with self.assertRaises(SmokeFailure) as captured:
+                    _request_json(
+                        self.config,
+                        "/api/import-runs/process-next",
+                        method="POST",
+                        payload={"project_id": 7},
+                    )
+
+                self.assertNotIsInstance(captured.exception, RetryableChunkFailure)
+
+    @patch("scripts.deployment_smoke.urlopen")
     def test_502_with_unparseable_body_raises_plain_smoke_failure(self, urlopen):
         urlopen.side_effect = HTTPError(
             url="https://example.invalid/api/import-runs/process-next",
