@@ -11,9 +11,9 @@ from app.services.generation import GenerationNotConfigured, _openai_client
 # Smaller chunks trade a few more requests for a lower risk of a long screenplay
 # breakdown returning an HTML timeout page before the API can emit structured JSON.
 MAX_CHUNK_CHARACTERS = 3000
-# Keep one provider attempt below the production smoke client's 60-second timeout.
+# Keep one provider attempt below the production smoke client's 120-second timeout.
 # The idempotent process-next caller owns retries, avoiding nested retry amplification.
-PROVIDER_TIMEOUT_SECONDS = 50.0
+PROVIDER_TIMEOUT_SECONDS = 90.0
 MAX_PROVIDER_ATTEMPTS = 1
 TRANSIENT_PROVIDER_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError)
 
