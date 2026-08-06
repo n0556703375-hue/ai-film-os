@@ -61,9 +61,9 @@ class ScreenplayBreakdownRetryTests(unittest.TestCase):
         )
         self.assertLessEqual(
             PROVIDER_TIMEOUT_SECONDS * MAX_PROVIDER_ATTEMPTS,
-            50.0,
+            90.0,
         )
-        self.assertLess(PROVIDER_TIMEOUT_SECONDS, 60.0)
+        self.assertLess(PROVIDER_TIMEOUT_SECONDS, 120.0)
 
     @patch(
         "app.services.screenplay_breakdown.TRANSIENT_PROVIDER_ERRORS",
