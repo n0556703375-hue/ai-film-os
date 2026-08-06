@@ -98,7 +98,7 @@ class PostgreSQLSchemaContractTests(unittest.TestCase):
 
         self.assertIn("UNIQUE(shot_id, media_type, version)", normalized)
         self.assertIn("idempotency_key TEXT NOT NULL UNIQUE", normalized)
-        self.assertIn("CHECK(media_type IN ('image', 'video'))", normalized)
+        self.assertIn("CHECK(media_type IN ('image', 'video', 'audio'))", normalized)
         self.assertIn("ON DELETE CASCADE", normalized)
         self.assertIn("ON DELETE SET NULL", normalized)
 

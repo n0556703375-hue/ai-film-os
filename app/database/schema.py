@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS prompt_versions (
 CREATE TABLE IF NOT EXISTS media_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     shot_id INTEGER NOT NULL,
-    media_type TEXT NOT NULL CHECK(media_type IN ('image', 'video')),
+    media_type TEXT NOT NULL CHECK(media_type IN ('image', 'video', 'audio')),
     version INTEGER NOT NULL,
     url TEXT NOT NULL,
     provider TEXT NOT NULL DEFAULT '',

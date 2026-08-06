@@ -32,7 +32,115 @@ def _add_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) 
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
+# Full definition of the target media_results table. Kept in sync with
+# schema.py's CREATE TABLE. Used to rebuild a legacy table whose media_type
+# CHECK does not yet allow 'audio'. __TABLE__ is substituted for the (possibly
+# temporary) table name; str.format is avoided because the DDL contains braces.
+_MEDIA_RESULTS_DDL = """
+CREATE TABLE __TABLE__ (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shot_id INTEGER NOT NULL,
+    media_type TEXT NOT NULL CHECK(media_type IN ('image', 'video', 'audio')),
+    version INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    prompt_version_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'טיוטה',
+    notes TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(shot_id, media_type, version),
+    FOREIGN KEY(shot_id) REFERENCES shots(id) ON DELETE CASCADE,
+    FOREIGN KEY(prompt_version_id) REFERENCES prompt_versions(id) ON DELETE SET NULL
+)
+"""
+
+# Every column, copied explicitly so the migration preserves ids, versions,
+# urls, provider/model, status, notes, metadata and timestamps exactly.
+_MEDIA_RESULTS_COLUMNS = (
+    "id, shot_id, media_type, version, url, provider, model, "
+    "prompt_version_id, status, notes, metadata_json, created_at"
+)
+
+
+def _media_type_check_allows_audio(conn: sqlite3.Connection) -> bool:
+    """True when media_results is absent or already allows 'audio'."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='media_results'"
+    ).fetchone()
+    if not row or not row[0]:
+        return True
+    return "'audio'" in row[0]
+
+
+def _migrate_media_results_media_type(conn: sqlite3.Connection) -> None:
+    """Rebuild media_results so media_type allows image/video/audio.
+
+    Changing a CHECK constraint in SQLite requires recreating the table. This
+    follows SQLite's documented table-rebuild procedure:
+
+      * It is idempotent — a table that already allows 'audio' is left alone.
+      * foreign_keys is turned OFF for the rebuild. Otherwise DROP TABLE would
+        perform an implicit DELETE of every media_results row, firing
+        approval_events' ON DELETE SET NULL and destroying approval references.
+        Since ids are preserved, references stay valid once the new table is in
+        place. PRAGMA foreign_keys is a no-op inside a transaction, so any
+        pending transaction is flushed and the pragma is toggled outside it.
+      * The rebuild runs inside an explicit transaction. Any failure rolls back,
+        leaving the original table intact — never a half-rebuilt table.
+      * PRAGMA foreign_key_check runs before commit; any row it returns aborts
+        the migration (rollback) rather than committing broken references.
+      * The AUTOINCREMENT high-water mark is preserved so ids are never reused.
+
+    PRAGMA ignore_check_constraints is never used; unknown media types remain
+    rejected throughout.
+    """
+    if _media_type_check_allows_audio(conn):
+        return
+
+    if conn.in_transaction:
+        conn.commit()
+
+    seq_row = conn.execute(
+        "SELECT seq FROM sqlite_sequence WHERE name='media_results'"
+    ).fetchone()
+    previous_seq = seq_row[0] if seq_row else None
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute(_MEDIA_RESULTS_DDL.replace("__TABLE__", "_media_results_audio_migration"))
+        conn.execute(
+            f"INSERT INTO _media_results_audio_migration ({_MEDIA_RESULTS_COLUMNS}) "
+            f"SELECT {_MEDIA_RESULTS_COLUMNS} FROM media_results"
+        )
+        conn.execute("DROP TABLE media_results")
+        conn.execute(
+            "ALTER TABLE _media_results_audio_migration RENAME TO media_results"
+        )
+        if previous_seq is not None:
+            conn.execute("DELETE FROM sqlite_sequence WHERE name='media_results'")
+            conn.execute(
+                "INSERT INTO sqlite_sequence(name, seq) VALUES('media_results', ?)",
+                (previous_seq,),
+            )
+        fk_problems = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if fk_problems:
+            raise RuntimeError(
+                "media_results audio migration produced "
+                f"{len(fk_problems)} foreign-key violation(s); rolled back."
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+
+
 def migrate_database(conn: sqlite3.Connection) -> None:
+    _migrate_media_results_media_type(conn)
     _add_columns(conn, "shots", {
         "shot_type": "TEXT NOT NULL DEFAULT 'רגיל'",
         "duration_seconds": "REAL",
