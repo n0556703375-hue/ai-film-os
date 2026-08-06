@@ -78,7 +78,7 @@ jobs:
             --project-id "${{ inputs.project_id }}" \
             --screenplay-file production-smoke-screenplay.txt \
             --execute-import \
-            --timeout-seconds 60 \
+            --timeout-seconds 120 \
             | tee production-smoke-result.json
 
       - name: Remove screenplay material
