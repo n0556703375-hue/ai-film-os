@@ -76,7 +76,7 @@ def _request_json(
             try:
                 error_body = json.loads(exc.read(4096).decode("utf-8"))
                 detail = error_body.get("detail") if isinstance(error_body, dict) else None
-                if isinstance(detail, dict) and detail.get("retryable"):
+                if isinstance(detail, dict) and detail.get("retryable") is True:
                     raise RetryableChunkFailure(
                         f"{method} {path} returned retryable HTTP 502"
                     ) from exc
@@ -123,7 +123,7 @@ def _scene_ids_with_shots(snapshot: dict[str, Any]) -> set[int]:
     return result
 
 
-_MAX_CHUNK_RETRIES = 3
+_MAX_CHUNK_ATTEMPTS = 3
 
 
 def _run_resumable_import(
@@ -134,7 +134,7 @@ def _run_resumable_import(
     state = build_import_payload(config)
     chunk_count = 0
     for _ in range(1000):
-        for chunk_attempt in range(1, _MAX_CHUNK_RETRIES + 1):
+        for chunk_attempt in range(1, _MAX_CHUNK_ATTEMPTS + 1):
             try:
                 response = _request_json(
                     config,
@@ -144,9 +144,9 @@ def _run_resumable_import(
                 )
                 break
             except RetryableChunkFailure:
-                if chunk_attempt == _MAX_CHUNK_RETRIES:
+                if chunk_attempt == _MAX_CHUNK_ATTEMPTS:
                     raise SmokeFailure(
-                        f"process-next chunk failed after {_MAX_CHUNK_RETRIES} retries"
+                        f"process-next chunk failed after {_MAX_CHUNK_ATTEMPTS} attempts"
                     )
                 time.sleep(2 ** chunk_attempt)
         if not isinstance(response, dict):
