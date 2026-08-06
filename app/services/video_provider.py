@@ -43,6 +43,8 @@ class DisabledVideoProvider:
 
 
 def get_video_provider() -> VideoProvider:
-    # Provider selection stays centralized here. A concrete provider adapter can be
-    # added without changing the queue, API, approval pipeline, or media storage.
+    import os
+    if os.getenv("KLING_API_KEY", "").strip():
+        from app.services.kling_provider import KlingProvider
+        return KlingProvider()
     return DisabledVideoProvider()

@@ -1,3 +1,4 @@
+import logging
 import os
 import socket
 import time
@@ -13,12 +14,16 @@ from app.services.generation import (
 from app.services.video_model_selector import select_video_model
 from app.services.video_provider import (
     VideoGenerationRequest,
+    VideoGenerationResult,
     VideoProviderNotConfigured,
     get_video_provider,
 )
 
+logger = logging.getLogger(__name__)
+
 POLL_INTERVAL_SECONDS = float(os.getenv("MEDIA_WORKER_POLL_INTERVAL", "3"))
 TASK_TIMEOUT_SECONDS = float(os.getenv("MEDIA_WORKER_TASK_TIMEOUT", "600"))
+KLING_POLL_INTERVAL = float(os.getenv("KLING_WORKER_POLL_INTERVAL", "15"))
 IDLE_SLEEP_SECONDS = float(os.getenv("MEDIA_WORKER_IDLE_SLEEP", "2"))
 
 
@@ -43,6 +48,76 @@ def _wait_for_magnific(
             raise RuntimeError(f"Magnific task ended with status {status}.")
         sleep(poll_interval)
     raise TimeoutError("Magnific task polling timed out.")
+
+
+def _wait_for_kling(
+    provider,
+    task_id: str,
+    *,
+    timeout_seconds: float = TASK_TIMEOUT_SECONDS,
+    poll_interval: float = KLING_POLL_INTERVAL,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """Poll provider.check_task() until Kling task succeeds or fails.
+
+    Args:
+        provider: KlingProvider instance (has check_task method).
+        task_id: Kling task_id returned by provider.submit().
+        timeout_seconds: total seconds before TimeoutError.
+        poll_interval: seconds between polls.
+        sleep: injectable for testing.
+
+    Returns:
+        Video URL from Kling CDN.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        sleep(poll_interval)
+        status = provider.check_task(task_id)
+        if status["status"] == "succeed":
+            return status["url"]
+        if status["status"] == "failed":
+            raise RuntimeError(f"Kling כשל ביצירת הווידאו: {status['reason']}")
+    raise TimeoutError(
+        f"Kling לא השלים את יצירת הווידאו אחרי {timeout_seconds:.0f} שניות."
+    )
+
+
+def _maybe_apply_sync(
+    video_url: str,
+    payload: dict,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """Apply Sync.so lip-sync when dialogue audio is available and configured.
+
+    Conditions for Sync to run:
+      - audio_mode == "dialogue"
+      - payload["audio_url"] is a non-empty string
+      - SYNC_API_KEY is configured
+
+    A Sync failure is logged as a warning but never cancels the Kling video:
+    the original video_url is returned unchanged.
+
+    Returns:
+        Lip-synced video URL, or original video_url if Sync is skipped/fails.
+    """
+    if payload.get("audio_mode") != "dialogue":
+        return video_url
+    audio_url = str(payload.get("audio_url") or "").strip()
+    if not audio_url:
+        return video_url
+
+    from app.core.config import settings
+    if not settings.sync_api_key:
+        return video_url
+
+    try:
+        from app.services.sync_provider import apply_lip_sync
+        return apply_lip_sync(video_url, audio_url, sleep=sleep)
+    except Exception as exc:
+        logger.warning("Sync.so lip-sync failed — keeping Kling video: %s", exc)
+        return video_url
 
 
 def _process_image_job(job: dict) -> dict:
@@ -113,10 +188,31 @@ def _process_video_job(job: dict) -> dict:
         aspect_ratio=str(payload.get("aspect_ratio") or "16:9"),
         model_profile=selection.profile,
     )
-    result = get_video_provider().generate(request)
+
+    provider = get_video_provider()
+
+    from app.services.kling_provider import KlingProvider
+    if isinstance(provider, KlingProvider):
+        task_id = provider.submit(request)
+        video_url = _wait_for_kling(provider, task_id)
+        from app.services.kling_provider import _model_for, _estimate_cost
+        model = _model_for(request.model_profile)
+        cost = _estimate_cost(request.duration_seconds, model)
+        result = VideoGenerationResult(
+            url=video_url,
+            provider="kling",
+            model=model,
+            external_task_id=task_id,
+            actual_cost_usd=cost,
+        )
+    else:
+        result = provider.generate(request)
+
+    final_url = _maybe_apply_sync(result.url, payload)
+
     media = shots.create_media_result(job["shot_id"], {
         "media_type": "video",
-        "url": result.url,
+        "url": final_url,
         "provider": result.provider,
         "model": result.model,
         "prompt_version_id": payload.get("prompt_version_id"),
@@ -127,6 +223,7 @@ def _process_video_job(job: dict) -> dict:
             "idempotency_key": job["idempotency_key"],
             "model_profile": selection.profile,
             "model_selection_reason": selection.reason,
+            "sync_applied": final_url != result.url,
         },
     })
     shots.update_shot(job["shot_id"], {"status": "וידאו טיוטה"})

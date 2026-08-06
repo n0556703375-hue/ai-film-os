@@ -28,6 +28,11 @@ class Settings:
     magnific_resolution = os.getenv("MAGNIFIC_RESOLUTION", "2K")
     generated_media_path = Path(os.getenv("GENERATED_MEDIA_PATH", BASE_DIR / "generated"))
     port = int(os.getenv("PORT", "8000"))
+    kling_api_key = os.getenv("KLING_API_KEY", "").strip()
+    kling_api_base = os.getenv("KLING_API_BASE", "https://api.klingai.com").rstrip("/")
+    kling_default_model = os.getenv("KLING_DEFAULT_MODEL", "kling-v3")
+    sync_api_key = os.getenv("SYNC_API_KEY", "").strip()
+    sync_api_base = os.getenv("SYNC_API_BASE", "https://api.sync.so").rstrip("/")
 
 
 settings = Settings()
