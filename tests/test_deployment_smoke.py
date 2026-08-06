@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from app.api.health import health
 from app.core.version import APP_VERSION
@@ -265,11 +265,11 @@ class DeploymentSmokeTests(unittest.TestCase):
         self.assertEqual(result["shots_created"], 1)
         process_next_calls = [c for c in request_json.call_args_list if "/api/import-runs/process-next" in c.args[1]]
         self.assertEqual(len(process_next_calls), 2)
-        mock_time.sleep.assert_called_once()
+        self.assertEqual(mock_time.sleep.call_args_list, [call(2)])
 
     @patch("scripts.deployment_smoke.time")
     @patch("scripts.deployment_smoke._request_json")
-    def test_process_next_raises_smoke_failure_after_max_retries(self, request_json, mock_time):
+    def test_process_next_raises_smoke_failure_after_max_attempts(self, request_json, mock_time):
         with tempfile.TemporaryDirectory() as directory:
             screenplay = Path(directory) / "screenplay.txt"
             screenplay.write_text("א" * 80, encoding="utf-8")
@@ -282,7 +282,7 @@ class DeploymentSmokeTests(unittest.TestCase):
                 RetryableChunkFailure("attempt 3"),
             ]
 
-            with self.assertRaisesRegex(SmokeFailure, "failed after"):
+            with self.assertRaisesRegex(SmokeFailure, "failed after 3 attempts"):
                 run_smoke(SmokeConfig(
                     base_url="https://example.invalid",
                     project_id=7,
@@ -290,7 +290,7 @@ class DeploymentSmokeTests(unittest.TestCase):
                     execute_import=True,
                 ))
 
-        self.assertEqual(mock_time.sleep.call_count, 2)
+        self.assertEqual(mock_time.sleep.call_args_list, [call(2), call(4)])
 
 
 if __name__ == "__main__":
