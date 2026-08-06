@@ -38,33 +38,32 @@ class ScreenplayBreakdownRetryTests(unittest.TestCase):
         (_TransientProviderError,),
     )
     @patch("app.services.screenplay_breakdown._openai_client")
-    def test_retries_one_transient_failure_and_keeps_each_attempt_bounded(
+    def test_transient_failure_returns_after_one_bounded_provider_attempt(
         self, client_factory
     ):
         calls = []
 
         def create(**kwargs):
             calls.append(kwargs)
-            if len(calls) == 1:
-                raise _TransientProviderError("temporary timeout")
-            return SimpleNamespace(output_text='[{"title":"א"}]')
+            raise _TransientProviderError("temporary timeout")
 
         client_factory.return_value = SimpleNamespace(
             responses=SimpleNamespace(create=create)
         )
 
-        response = _request_breakdown("prompt")
+        with self.assertRaisesRegex(_TransientProviderError, "temporary timeout"):
+            _request_breakdown("prompt")
 
-        self.assertEqual(response.output_text, '[{"title":"א"}]')
-        self.assertEqual(MAX_PROVIDER_ATTEMPTS, 2)
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(MAX_PROVIDER_ATTEMPTS, 1)
+        self.assertEqual(len(calls), 1)
         self.assertTrue(
             all(call["timeout"] == PROVIDER_TIMEOUT_SECONDS for call in calls)
         )
         self.assertLessEqual(
             PROVIDER_TIMEOUT_SECONDS * MAX_PROVIDER_ATTEMPTS,
-            40.0,
+            50.0,
         )
+        self.assertLess(PROVIDER_TIMEOUT_SECONDS, 60.0)
 
     @patch(
         "app.services.screenplay_breakdown.TRANSIENT_PROVIDER_ERRORS",
@@ -109,7 +108,7 @@ class ScreenplayBreakdownRetryTests(unittest.TestCase):
             _request_breakdown("prompt")
         elapsed = time.time() - start_time
 
-        # Both attempts time out at _TEST_DEADLINE_SECONDS each.
+        # The single provider attempt times out at _TEST_DEADLINE_SECONDS.
         # Total should be well under 5 seconds (plenty of tolerance for CI).
         self.assertLess(elapsed, 5.0)
 
@@ -121,13 +120,13 @@ class ScreenplayBreakdownRetryTests(unittest.TestCase):
         (APITimeoutError,),
     )
     @patch("app.services.screenplay_breakdown._openai_client")
-    def test_timeout_on_both_attempts_raises_after_retry_budget(self, client_factory):
-        """App-level timeout is treated as transient and exhausts retry budget exactly."""
+    def test_timeout_raises_after_single_provider_attempt(self, client_factory):
+        """App-level timeout returns after exactly one bounded provider attempt."""
         calls = []
 
         def create(**kwargs):
             calls.append(kwargs)
-            time.sleep(1000)  # Both attempts hang
+            time.sleep(1000)  # The provider attempt hangs
             return SimpleNamespace(output_text='[{"title":"א"}]')
 
         client_factory.return_value = SimpleNamespace(
@@ -137,7 +136,7 @@ class ScreenplayBreakdownRetryTests(unittest.TestCase):
         with self.assertRaises(APITimeoutError):
             _request_breakdown("prompt")
 
-        # Exactly MAX_PROVIDER_ATTEMPTS submissions, no more, no less.
+        # Exactly one bounded provider submission, no nested retry.
         self.assertEqual(len(calls), MAX_PROVIDER_ATTEMPTS)
 
     # --- Normal-path tests ---
@@ -173,7 +172,7 @@ class ScreenplayBreakdownRetryTests(unittest.TestCase):
                 _request_breakdown("prompt")
             elapsed = time.time() - start_time
 
-            # Must fail-fast: well under the deadline, not after 18+ seconds.
+            # Must fail-fast: well under the deadline, not after 50 seconds.
             self.assertLess(elapsed, 1.0)
         finally:
             for _ in range(held):
@@ -203,8 +202,8 @@ class ScreenplayBreakdownRetryTests(unittest.TestCase):
 
         def create(**kwargs):
             call_count[0] += 1
-            if call_count[0] <= 2:
-                # First two calls (attempts 1 and 2) hang
+            if call_count[0] <= 1:
+                # The first bounded provider attempt hangs
                 time.sleep(1000)
             return SimpleNamespace(output_text='[{"title":"סצנה"}]')
 
@@ -212,11 +211,11 @@ class ScreenplayBreakdownRetryTests(unittest.TestCase):
             responses=SimpleNamespace(create=create)
         )
 
-        # First request times out after both attempts.
+        # First request times out after its single provider attempt.
         with self.assertRaises(APITimeoutError):
             _request_breakdown("prompt")
 
-        self.assertEqual(call_count[0], 2)
+        self.assertEqual(call_count[0], 1)
 
         # Reset semaphore so the second request can proceed despite stuck threads.
         _breakdown_module._PROVIDER_SEMAPHORE = threading.Semaphore(4)

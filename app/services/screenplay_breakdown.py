@@ -11,16 +11,17 @@ from app.services.generation import GenerationNotConfigured, _openai_client
 # Smaller chunks trade a few more requests for a lower risk of a long screenplay
 # breakdown returning an HTML timeout page before the API can emit structured JSON.
 MAX_CHUNK_CHARACTERS = 3000
-# Bound the complete two-attempt provider operation below the proxy window.
-PROVIDER_TIMEOUT_SECONDS = 18.0
-MAX_PROVIDER_ATTEMPTS = 2
+# Keep one provider attempt below the production smoke client's 60-second timeout.
+# The idempotent process-next caller owns retries, avoiding nested retry amplification.
+PROVIDER_TIMEOUT_SECONDS = 50.0
+MAX_PROVIDER_ATTEMPTS = 1
 TRANSIENT_PROVIDER_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError)
 
 # Maximum concurrent in-flight provider threads. When timed-out daemon threads
 # remain alive after their deadline (Python cannot forcibly terminate them once
 # blocked in the SDK), this cap bounds the number of leaked threads at any time.
-# Attempts that cannot acquire a slot fail immediately as APIConnectionError,
-# which is treated as a transient error and consumed by the retry budget.
+# Calls that cannot acquire a slot fail immediately as APIConnectionError so
+# the project-scoped caller can retry the same unchanged chunk safely.
 _PROVIDER_SEMAPHORE = threading.Semaphore(4)
 
 
@@ -79,7 +80,7 @@ def _extract_json_array(raw: str) -> list[dict]:
 
 
 def _request_breakdown(prompt: str):
-    """Retry only transient provider errors while keeping the total call bounded.
+    """Keep each provider call bounded; idempotent callers own retry policy.
 
     Enforces an independent app-level deadline using daemon threads to ensure
     control returns even if the provider SDK's timeout parameter is unreliable.
