@@ -21,9 +21,37 @@ POLL_INTERVAL_SECONDS = float(os.getenv("MEDIA_WORKER_POLL_INTERVAL", "3"))
 TASK_TIMEOUT_SECONDS = float(os.getenv("MEDIA_WORKER_TASK_TIMEOUT", "600"))
 IDLE_SLEEP_SECONDS = float(os.getenv("MEDIA_WORKER_IDLE_SLEEP", "2"))
 
+_FAILURE_IMAGE_PROVIDER_NOT_CONFIGURED = "image_provider_not_configured"
+_FAILURE_VIDEO_PROVIDER_NOT_CONFIGURED = "video_provider_not_configured"
+_FAILURE_INVALID_JOB = "invalid_job"
+_FAILURE_PROVIDER_TIMEOUT = "provider_timeout"
+_FAILURE_PROVIDER_CONNECTION = "provider_connection"
+_FAILURE_PROVIDER = "provider_failure"
+
 
 def _worker_id() -> str:
     return os.getenv("MEDIA_WORKER_ID") or f"{socket.gethostname()}-{os.getpid()}"
+
+
+def _classify_job_failure(exc: Exception) -> tuple[str, bool]:
+    """Return a fixed persistence-safe category and the existing retry policy.
+
+    Provider exceptions may contain request URLs, signed media URLs, prompts,
+    response bodies or credentials. Their string representations must never be
+    written to media_jobs.last_error. Keep this mapping closed and made only of
+    fixed literals so new exception text fails safely into provider_failure.
+    """
+    if isinstance(exc, GenerationNotConfigured):
+        return _FAILURE_IMAGE_PROVIDER_NOT_CONFIGURED, False
+    if isinstance(exc, VideoProviderNotConfigured):
+        return _FAILURE_VIDEO_PROVIDER_NOT_CONFIGURED, False
+    if isinstance(exc, ValueError):
+        return _FAILURE_INVALID_JOB, False
+    if isinstance(exc, TimeoutError):
+        return _FAILURE_PROVIDER_TIMEOUT, True
+    if isinstance(exc, ConnectionError):
+        return _FAILURE_PROVIDER_CONNECTION, True
+    return _FAILURE_PROVIDER, True
 
 
 def _wait_for_magnific(
@@ -157,12 +185,9 @@ def process_one_job(worker_id: str | None = None) -> dict | None:
             result,
             float(result.get("actual_cost_usd", 0)),
         )
-    except (GenerationNotConfigured, VideoProviderNotConfigured, ValueError) as exc:
-        return jobs.fail_job(job["id"], str(exc), retryable=False)
-    except (TimeoutError, ConnectionError) as exc:
-        return jobs.fail_job(job["id"], str(exc), retryable=True)
     except Exception as exc:
-        return jobs.fail_job(job["id"], str(exc), retryable=True)
+        error_category, retryable = _classify_job_failure(exc)
+        return jobs.fail_job(job["id"], error_category, retryable=retryable)
 
 
 def run_forever() -> None:
