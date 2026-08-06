@@ -10,7 +10,7 @@ from app.services.generation import GenerationNotConfigured, _openai_client
 # Keep each provider request comfortably below typical reverse-proxy timeouts.
 # Smaller chunks trade a few more requests for a lower risk of a long screenplay
 # breakdown returning an HTML timeout page before the API can emit structured JSON.
-MAX_CHUNK_CHARACTERS = 6000
+MAX_CHUNK_CHARACTERS = 3000
 # Bound the complete two-attempt provider operation below the proxy window.
 PROVIDER_TIMEOUT_SECONDS = 18.0
 MAX_PROVIDER_ATTEMPTS = 2
