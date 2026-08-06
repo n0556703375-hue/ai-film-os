@@ -6,7 +6,8 @@ No real API keys are used — all HTTP calls are mocked.
 """
 import json
 import unittest
-from unittest.mock import patch
+from contextlib import closing
+from unittest.mock import Mock, patch
 
 import httpx
 
@@ -364,66 +365,289 @@ class CheckSyncConnectionTests(unittest.TestCase):
 # Worker integration: _maybe_apply_sync
 # ---------------------------------------------------------------------------
 
-class MaybeApplySyncTests(unittest.TestCase):
+KLING_VIDEO_URL = "https://kling.example.com/v.mp4"
+APPROVED_AUDIO_URL = "https://audio.example.com/approved.mp3"
+
+
+def _seed_audio_media_result(
+    shot_id: int,
+    url: str = APPROVED_AUDIO_URL,
+    *,
+    media_type: str = "audio",
+    status: str = "מאושר",
+):
+    """Insert a media_results row, bypassing the image/video CHECK constraint.
+
+    The schema currently restricts media_type to ('image','video'); audio is
+    not yet a storable type in production. Tests seed it directly (the schema
+    migration is intentionally out of scope for this patch) so the resolver's
+    success and rejection paths can both be exercised.
+    """
+    from app.database.connection import get_connection
+
+    with closing(get_connection()) as conn:
+        conn.execute("PRAGMA ignore_check_constraints=ON")
+        version = conn.execute(
+            "SELECT COALESCE(MAX(version),0)+1 AS v FROM media_results WHERE shot_id=? AND media_type=?",
+            (shot_id, media_type),
+        ).fetchone()["v"]
+        cur = conn.execute(
+            "INSERT INTO media_results (shot_id,media_type,version,url,status) VALUES (?,?,?,?,?)",
+            (shot_id, media_type, version, url, status),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+class _WorkerDbFixture(unittest.TestCase):
+    """Real temp DB with a project/scene/shot and injectable seeded media."""
+
     def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        from app.database.connection import init_db
+        from app.repositories import projects, scenes, shots
+
         self._orig_key = settings.sync_api_key
         settings.sync_api_key = "test-sync-key"
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_db = settings.database_path
+        settings.database_path = Path(self._tmp.name) / "test.db"
+        init_db()
+
+        project = projects.create_project(
+            {"name": "Sync Test", "description": "", "visual_style": "", "rules": ""}
+        )
+        scene = scenes.create_scene({
+            "project_id": project["id"], "scene_number": 1, "title": "S",
+            "status": "מתוכנן", "story_goal": "", "emotion": "", "conflict": "",
+            "beginning": "", "ending": "", "notes": "",
+        })
+        shot = shots.create_shot({
+            "project_id": project["id"], "scene_id": scene["id"], "shot_number": 1,
+            "title": "Shot", "prompt": "prompt", "status": "פרומפט מוכן",
+        })
+        self.project = project
+        self.scene = scene
+        self.shot = shot
+        self.job = {"id": 1, "shot_id": shot["id"], "project_id": project["id"]}
 
     def tearDown(self):
         settings.sync_api_key = self._orig_key
+        settings.database_path = self._orig_db
+        self._tmp.cleanup()
 
+    def _new_shot(self, *, project=None):
+        from app.repositories import scenes, shots
+
+        proj = project or self.project
+        scene = scenes.create_scene({
+            "project_id": proj["id"], "scene_number": 2, "title": "S2",
+            "status": "מתוכנן", "story_goal": "", "emotion": "", "conflict": "",
+            "beginning": "", "ending": "", "notes": "",
+        })
+        return shots.create_shot({
+            "project_id": proj["id"], "scene_id": scene["id"], "shot_number": 1,
+            "title": "Shot2", "prompt": "p", "status": "פרומפט מוכן",
+        })
+
+    def _new_project(self):
+        from app.repositories import projects
+
+        return projects.create_project(
+            {"name": "Other", "description": "", "visual_style": "", "rules": ""}
+        )
+
+
+class MaybeApplySyncTests(_WorkerDbFixture):
     def test_non_dialogue_mode_skips_sync(self):
         from app.worker import _maybe_apply_sync
         result = _maybe_apply_sync(
-            "https://kling.example.com/v.mp4",
-            {"audio_mode": "none", "audio_url": "https://audio.example.com/a.mp3"},
+            KLING_VIDEO_URL, {"audio_mode": "none"}, job=self.job
         )
-        self.assertEqual(result, "https://kling.example.com/v.mp4")
+        self.assertEqual(result, KLING_VIDEO_URL)
 
-    def test_dialogue_without_audio_url_skips_sync(self):
+    def test_approved_audio_from_same_shot_runs_sync(self):
         from app.worker import _maybe_apply_sync
-        result = _maybe_apply_sync(
-            "https://kling.example.com/v.mp4",
-            {"audio_mode": "dialogue", "audio_url": ""},
-        )
-        self.assertEqual(result, "https://kling.example.com/v.mp4")
+
+        audio_id = _seed_audio_media_result(self.shot["id"])
+        captured = {}
+
+        def _ok(video_url, audio_url, **kw):
+            captured["audio_url"] = audio_url
+            return "https://cdn.sync.so/synced.mp4"
+
+        with patch("app.services.sync_provider.apply_lip_sync", _ok):
+            result = _maybe_apply_sync(
+                KLING_VIDEO_URL,
+                {"audio_mode": "dialogue", "audio_media_result_id": audio_id},
+                job=self.job,
+                sleep=lambda _s: None,
+            )
+
+        self.assertEqual(result, "https://cdn.sync.so/synced.mp4")
+        # The resolved server-side URL is used, never a client-supplied one.
+        self.assertEqual(captured["audio_url"], APPROVED_AUDIO_URL)
+
+    def test_raw_audio_url_in_payload_is_ignored(self):
+        from app.worker import _maybe_apply_sync
+
+        # A non-raising Mock is used deliberately: _maybe_apply_sync swallows
+        # exceptions, so a _boom would be hidden. assert_not_called is the
+        # only assertion that proves Sync was never invoked.
+        lip = Mock()
+        with patch("app.services.sync_provider.apply_lip_sync", lip):
+            with patch("app.services.sync_provider.httpx.Client") as client:
+                result = _maybe_apply_sync(
+                    KLING_VIDEO_URL,
+                    {"audio_mode": "dialogue", "audio_url": "https://evil.example/a.mp3"},
+                    job=self.job,
+                    sleep=lambda _s: None,
+                )
+        lip.assert_not_called()
+        client.assert_not_called()
+        self.assertEqual(result, KLING_VIDEO_URL)
 
     def test_dialogue_without_sync_key_skips_sync(self):
         from app.worker import _maybe_apply_sync
+
         settings.sync_api_key = ""
-        result = _maybe_apply_sync(
-            "https://kling.example.com/v.mp4",
-            {"audio_mode": "dialogue", "audio_url": "https://audio.example.com/a.mp3"},
-        )
-        self.assertEqual(result, "https://kling.example.com/v.mp4")
+        audio_id = _seed_audio_media_result(self.shot["id"])
+
+        lip = Mock()
+        with patch("app.services.sync_provider.apply_lip_sync", lip):
+            with patch("app.services.sync_provider.httpx.Client") as client:
+                result = _maybe_apply_sync(
+                    KLING_VIDEO_URL,
+                    {"audio_mode": "dialogue", "audio_media_result_id": audio_id},
+                    job=self.job,
+                    sleep=lambda _s: None,
+                )
+        lip.assert_not_called()
+        client.assert_not_called()
+        self.assertEqual(result, KLING_VIDEO_URL)
 
     def test_sync_failure_returns_original_kling_url(self):
         from app.worker import _maybe_apply_sync
+
+        audio_id = _seed_audio_media_result(self.shot["id"])
 
         def _fail(*a, **kw):
             raise RuntimeError("Sync.so server exploded")
 
         with patch("app.services.sync_provider.apply_lip_sync", _fail):
             result = _maybe_apply_sync(
-                "https://kling.example.com/v.mp4",
-                {"audio_mode": "dialogue", "audio_url": "https://audio.example.com/a.mp3"},
+                KLING_VIDEO_URL,
+                {"audio_mode": "dialogue", "audio_media_result_id": audio_id},
+                job=self.job,
+                sleep=lambda _s: None,
             )
 
-        self.assertEqual(result, "https://kling.example.com/v.mp4")
+        self.assertEqual(result, KLING_VIDEO_URL)
 
-    def test_successful_sync_returns_synced_url(self):
+
+class SyncAudioEligibilityTests(_WorkerDbFixture):
+    """Every rejected case must skip Sync without any HTTP call."""
+
+    def _assert_skips_without_http(self, payload):
         from app.worker import _maybe_apply_sync
 
-        def _ok(video_url, audio_url, **kw):
-            return "https://cdn.sync.so/synced.mp4"
-
-        with patch("app.services.sync_provider.apply_lip_sync", _ok):
+        # apply_lip_sync is left real so the only way HTTP is avoided is a
+        # genuine eligibility rejection. Two independent probes prove the skip:
+        # the injected apply_lip_sync spy must not be called, and no httpx
+        # client may be constructed. Because _maybe_apply_sync swallows
+        # exceptions, neither probe raises — both assert after the fact.
+        lip = Mock()
+        with patch("app.services.sync_provider.apply_lip_sync", lip):
             result = _maybe_apply_sync(
-                "https://kling.example.com/v.mp4",
-                {"audio_mode": "dialogue", "audio_url": "https://audio.example.com/a.mp3"},
+                KLING_VIDEO_URL, payload, job=self.job, sleep=lambda _s: None
             )
+        lip.assert_not_called()
 
-        self.assertEqual(result, "https://cdn.sync.so/synced.mp4")
+        # Second probe: real apply_lip_sync, patched transport.
+        with patch("app.services.sync_provider.httpx.Client") as client:
+            result2 = _maybe_apply_sync(
+                KLING_VIDEO_URL, payload, job=self.job, sleep=lambda _s: None
+            )
+        client.assert_not_called()
+
+        self.assertEqual(result, KLING_VIDEO_URL)
+        self.assertEqual(result2, KLING_VIDEO_URL)
+
+    def test_missing_audio_reference_skips(self):
+        self._assert_skips_without_http({"audio_mode": "dialogue"})
+
+    def test_invalid_audio_reference_skips(self):
+        self._assert_skips_without_http(
+            {"audio_mode": "dialogue", "audio_media_result_id": "not-an-int"}
+        )
+
+    def test_nonexistent_media_result_skips(self):
+        self._assert_skips_without_http(
+            {"audio_mode": "dialogue", "audio_media_result_id": 999999}
+        )
+
+    def test_audio_from_another_shot_same_project_skips(self):
+        other_shot = self._new_shot()
+        audio_id = _seed_audio_media_result(other_shot["id"])
+        self._assert_skips_without_http(
+            {"audio_mode": "dialogue", "audio_media_result_id": audio_id}
+        )
+
+    def test_audio_from_another_project_skips(self):
+        other_project = self._new_project()
+        other_shot = self._new_shot(project=other_project)
+        audio_id = _seed_audio_media_result(other_shot["id"])
+        # Even if a forged job claimed the other project, the shot/project pair
+        # still must match the record; here the job points at self.project.
+        self._assert_skips_without_http(
+            {"audio_mode": "dialogue", "audio_media_result_id": audio_id}
+        )
+
+    def test_unapproved_audio_skips(self):
+        audio_id = _seed_audio_media_result(self.shot["id"], status="טיוטה")
+        self._assert_skips_without_http(
+            {"audio_mode": "dialogue", "audio_media_result_id": audio_id}
+        )
+
+    def test_wrong_media_type_skips(self):
+        audio_id = _seed_audio_media_result(self.shot["id"], media_type="video")
+        self._assert_skips_without_http(
+            {"audio_mode": "dialogue", "audio_media_result_id": audio_id}
+        )
+
+    def test_empty_url_skips(self):
+        audio_id = _seed_audio_media_result(self.shot["id"], url="")
+        self._assert_skips_without_http(
+            {"audio_mode": "dialogue", "audio_media_result_id": audio_id}
+        )
+
+    def test_cross_project_record_is_not_resolved_by_repository(self):
+        from app.repositories import media_results
+
+        other_project = self._new_project()
+        other_shot = self._new_shot(project=other_project)
+        audio_id = _seed_audio_media_result(other_shot["id"])
+
+        # Correct owning shot+project resolves.
+        self.assertIsNotNone(
+            media_results.get_approved_audio_for_shot(
+                audio_id, other_shot["id"], other_project["id"]
+            )
+        )
+        # Same id with this job's shot/project must not resolve.
+        self.assertIsNone(
+            media_results.get_approved_audio_for_shot(
+                audio_id, self.shot["id"], self.project["id"]
+            )
+        )
+        # Right shot but wrong project must not resolve.
+        self.assertIsNone(
+            media_results.get_approved_audio_for_shot(
+                audio_id, other_shot["id"], self.project["id"]
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -595,8 +819,19 @@ class SyncReturnedDataRedactionTests(_SentinelBase):
         self.assertNoSentinels(str(result))
 
 
-class SyncLogRedactionTests(_SentinelBase):
+class SyncLogRedactionTests(_WorkerDbFixture):
     """_maybe_apply_sync must log only a stable sanitized category."""
+
+    def setUp(self):
+        super().setUp()
+        settings.sync_api_key = SENTINEL_API_KEY
+        self._audio_id = _seed_audio_media_result(self.shot["id"], url=SENTINEL_AUDIO_URL)
+
+    def assertNoSentinels(self, text, *, allow=()):
+        for sentinel in _ALL_SENTINELS:
+            if sentinel in allow:
+                continue
+            self.assertNotIn(sentinel, text)
 
     def _run_with_failure(self, exc_to_raise):
         from app.worker import _maybe_apply_sync
@@ -608,7 +843,8 @@ class SyncLogRedactionTests(_SentinelBase):
             with self.assertLogs("app.worker", level="WARNING") as captured:
                 result = _maybe_apply_sync(
                     SENTINEL_VIDEO_URL,
-                    {"audio_mode": "dialogue", "audio_url": SENTINEL_AUDIO_URL},
+                    {"audio_mode": "dialogue", "audio_media_result_id": self._audio_id},
+                    job=self.job,
                     sleep=lambda _s: None,
                 )
         return result, "\n".join(captured.output)

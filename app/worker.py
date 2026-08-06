@@ -83,18 +83,76 @@ def _wait_for_kling(
     )
 
 
+class SyncAudioRejection:
+    """Stable, sanitized reasons Sync audio was refused. Never carries values."""
+
+    NO_AUDIO_REFERENCE = "no_audio_reference"
+    INVALID_AUDIO_REFERENCE = "invalid_audio_reference"
+    AUDIO_NOT_RESOLVED = "audio_not_resolved"
+    AUDIO_URL_EMPTY = "audio_url_empty"
+
+
+def _resolve_approved_audio_url(job: dict, payload: dict) -> tuple[str | None, str]:
+    """Resolve the approved, project-owned audio URL for a video job.
+
+    The client-supplied ``payload["audio_url"]`` is never read. Only
+    ``payload["audio_media_result_id"]`` is honoured, and it is resolved
+    through a shot- and project-constrained repository query.
+
+    Returns:
+        (url, reason). ``url`` is None whenever Sync must not run; ``reason``
+        is a stable category safe to log — it never contains the identifier,
+        the resolved URL, or any client payload.
+    """
+    raw = payload.get("audio_media_result_id")
+    if raw is None or isinstance(raw, bool):
+        return None, SyncAudioRejection.NO_AUDIO_REFERENCE
+    try:
+        media_result_id = int(raw)
+    except (TypeError, ValueError):
+        return None, SyncAudioRejection.INVALID_AUDIO_REFERENCE
+    if media_result_id < 1:
+        return None, SyncAudioRejection.INVALID_AUDIO_REFERENCE
+
+    from app.repositories import media_results
+
+    # A single constrained query proves existence, shot ownership, project
+    # ownership, media type and approval together. Missing, cross-shot,
+    # cross-project, wrong-type and unapproved records are indistinguishable
+    # here by design, so a rejection reason cannot be used to probe for the
+    # existence of records in other projects.
+    record = media_results.get_approved_audio_for_shot(
+        media_result_id,
+        job.get("shot_id"),
+        job.get("project_id"),
+    )
+    if not record:
+        return None, SyncAudioRejection.AUDIO_NOT_RESOLVED
+
+    url = record.get("url")
+    if not isinstance(url, str) or not url.strip():
+        return None, SyncAudioRejection.AUDIO_URL_EMPTY
+    return url.strip(), ""
+
+
 def _maybe_apply_sync(
     video_url: str,
     payload: dict,
     *,
+    job: dict,
     sleep: Callable[[float], None] = time.sleep,
 ) -> str:
-    """Apply Sync.so lip-sync when dialogue audio is available and configured.
+    """Apply Sync.so lip-sync when approved dialogue audio is available.
 
     Conditions for Sync to run:
       - audio_mode == "dialogue"
-      - payload["audio_url"] is a non-empty string
+      - payload["audio_media_result_id"] resolves to an approved audio
+        media record owned by this job's shot and project
       - SYNC_API_KEY is configured
+
+    ``payload["audio_url"]`` is deliberately ignored: a caller must not be
+    able to point Sync at arbitrary media. ``job`` is keyword-only and
+    required so no call site can skip project scoping.
 
     A Sync failure is logged as a warning but never cancels the Kling video:
     the original video_url is returned unchanged.
@@ -104,8 +162,13 @@ def _maybe_apply_sync(
     """
     if payload.get("audio_mode") != "dialogue":
         return video_url
-    audio_url = str(payload.get("audio_url") or "").strip()
-    if not audio_url:
+
+    audio_url, rejection = _resolve_approved_audio_url(job, payload)
+    if audio_url is None:
+        if rejection != SyncAudioRejection.NO_AUDIO_REFERENCE:
+            logger.warning(
+                "Sync.so skipped — approved audio not resolved (reason=%s)", rejection
+            )
         return video_url
 
     from app.core.config import settings
@@ -224,7 +287,7 @@ def _process_video_job(job: dict) -> dict:
     else:
         result = provider.generate(request)
 
-    final_url = _maybe_apply_sync(result.url, payload)
+    final_url = _maybe_apply_sync(result.url, payload, job=job)
 
     media = shots.create_media_result(job["shot_id"], {
         "media_type": "video",
