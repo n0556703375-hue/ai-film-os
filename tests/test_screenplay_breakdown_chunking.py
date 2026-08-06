@@ -45,7 +45,7 @@ class ScreenplayBreakdownChunkingTests(unittest.TestCase):
         self.assertEqual(result[0]["title"], "א")
 
     @patch("app.services.screenplay_breakdown._openai_client")
-    def test_provider_call_uses_timeout_below_proxy_limit(self, client_factory):
+    def test_provider_call_uses_timeout_below_smoke_client_limit(self, client_factory):
         calls = []
 
         def create(**kwargs):
@@ -59,7 +59,7 @@ class ScreenplayBreakdownChunkingTests(unittest.TestCase):
         breakdown_screenplay({"name": "בדיקה"}, "סצנה קצרה")
 
         self.assertGreater(PROVIDER_TIMEOUT_SECONDS, 0)
-        self.assertLess(PROVIDER_TIMEOUT_SECONDS, 40.0)
+        self.assertLess(PROVIDER_TIMEOUT_SECONDS, 60.0)
         self.assertEqual(calls[0]["timeout"], PROVIDER_TIMEOUT_SECONDS)
 
     @patch("app.services.screenplay_breakdown._openai_client")
