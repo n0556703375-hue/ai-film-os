@@ -57,6 +57,7 @@ def import_scenes(project_id: int, scenes: list[dict], replace_existing: bool = 
             ))
             created.append({
                 "id": cur.lastrowid,
+                "project_id": project_id,
                 "scene_number": scene["scene_number"],
                 "recommended_shot_count": scene.get("recommended_shot_count", 6),
                 "estimated_duration_seconds": scene.get("estimated_duration_seconds", 60),
