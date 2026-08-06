@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,11 @@ from urllib.request import Request, urlopen
 
 
 class SmokeFailure(RuntimeError):
+    pass
+
+
+class RetryableChunkFailure(SmokeFailure):
+    """process-next returned HTTP 502 with retryable=True; the caller may retry the same chunk."""
     pass
 
 
@@ -66,6 +72,16 @@ def _request_json(
             raw = response.read()
             content_type = response.headers.get("Content-Type", "")
     except HTTPError as exc:
+        if exc.code == 502:
+            try:
+                error_body = json.loads(exc.read(4096).decode("utf-8"))
+                detail = error_body.get("detail") if isinstance(error_body, dict) else None
+                if isinstance(detail, dict) and detail.get("retryable"):
+                    raise RetryableChunkFailure(
+                        f"{method} {path} returned retryable HTTP 502"
+                    ) from exc
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError, AttributeError):
+                pass
         raise SmokeFailure(f"{method} {path} returned HTTP {exc.code}") from exc
     except URLError as exc:
         raise SmokeFailure(f"{method} {path} could not reach the deployed service") from exc
@@ -107,6 +123,9 @@ def _scene_ids_with_shots(snapshot: dict[str, Any]) -> set[int]:
     return result
 
 
+_MAX_CHUNK_RETRIES = 3
+
+
 def _run_resumable_import(
     config: SmokeConfig,
     *,
@@ -115,12 +134,21 @@ def _run_resumable_import(
     state = build_import_payload(config)
     chunk_count = 0
     for _ in range(1000):
-        response = _request_json(
-            config,
-            "/api/import-runs/process-next",
-            method="POST",
-            payload=state,
-        )
+        for chunk_attempt in range(1, _MAX_CHUNK_RETRIES + 1):
+            try:
+                response = _request_json(
+                    config,
+                    "/api/import-runs/process-next",
+                    method="POST",
+                    payload=state,
+                )
+                break
+            except RetryableChunkFailure:
+                if chunk_attempt == _MAX_CHUNK_RETRIES:
+                    raise SmokeFailure(
+                        f"process-next chunk failed after {_MAX_CHUNK_RETRIES} retries"
+                    )
+                time.sleep(2 ** chunk_attempt)
         if not isinstance(response, dict):
             raise SmokeFailure("Resumable screenplay breakdown returned an invalid shape")
         state = {
