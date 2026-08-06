@@ -43,7 +43,8 @@ class ProductionScreenplaySmokeWorkflowTests(unittest.TestCase):
         self.assertNotIn("base64.b64decode", self.workflow)
 
     def test_import_requires_existing_safe_script_flag(self) -> None:
-        self.assertIn("scripts/deployment_import_idempotency.py", self.workflow)
+        self.assertIn("python -m scripts.deployment_import_idempotency", self.workflow)
+        self.assertNotIn("python scripts/deployment_import_idempotency.py", self.workflow)
         self.assertIn("--execute-import", self.workflow)
         self.assertIn("cancel-in-progress: false", self.workflow)
 
