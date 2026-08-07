@@ -1,3 +1,4 @@
+import logging
 import os
 import socket
 import time
@@ -13,12 +14,16 @@ from app.services.generation import (
 from app.services.video_model_selector import select_video_model
 from app.services.video_provider import (
     VideoGenerationRequest,
+    VideoGenerationResult,
     VideoProviderNotConfigured,
     get_video_provider,
 )
 
+logger = logging.getLogger(__name__)
+
 POLL_INTERVAL_SECONDS = float(os.getenv("MEDIA_WORKER_POLL_INTERVAL", "3"))
 TASK_TIMEOUT_SECONDS = float(os.getenv("MEDIA_WORKER_TASK_TIMEOUT", "600"))
+KLING_POLL_INTERVAL = float(os.getenv("KLING_WORKER_POLL_INTERVAL", "15"))
 IDLE_SLEEP_SECONDS = float(os.getenv("MEDIA_WORKER_IDLE_SLEEP", "2"))
 
 
@@ -43,6 +48,165 @@ def _wait_for_magnific(
             raise RuntimeError(f"Magnific task ended with status {status}.")
         sleep(poll_interval)
     raise TimeoutError("Magnific task polling timed out.")
+
+
+def _wait_for_kling(
+    provider,
+    task_id: str,
+    *,
+    timeout_seconds: float | None = None,
+    poll_interval: float | None = None,
+    sleep: Callable[[float], None] | None = None,
+) -> str:
+    """Poll provider.check_task() until the Kling task succeeds or fails.
+
+    The submission itself has already been persisted (provider_task_id) before
+    this runs, so a timeout here is retryable and resumes the *same* task
+    rather than submitting a new one.
+
+    Args:
+        provider: KlingProvider instance (has check_task method).
+        task_id: Kling task_id returned by provider.submit().
+        timeout_seconds: total seconds before TimeoutError.
+        poll_interval: seconds between polls.
+        sleep: injectable for testing.
+
+    Returns:
+        Video URL from the Kling CDN.
+    """
+    # Resolved at call time (not as bound defaults) so the poll cadence and
+    # the injectable clock can be overridden — including by tests — after the
+    # module's constants are set.
+    timeout_seconds = TASK_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    poll_interval = KLING_POLL_INTERVAL if poll_interval is None else poll_interval
+    sleep = time.sleep if sleep is None else sleep
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        sleep(poll_interval)
+        status = provider.check_task(task_id)
+        if status["status"] == "succeed":
+            return status["url"]
+        if status["status"] == "failed":
+            raise RuntimeError(f"Kling כשל ביצירת הווידאו: {status['reason']}")
+    raise TimeoutError(
+        f"Kling לא השלים את יצירת הווידאו אחרי {timeout_seconds:.0f} שניות."
+    )
+
+
+class SyncAudioRejection:
+    """Stable, sanitized reasons Sync audio was refused. Never carries values."""
+
+    NO_AUDIO_REFERENCE = "no_audio_reference"
+    INVALID_AUDIO_REFERENCE = "invalid_audio_reference"
+    AUDIO_NOT_RESOLVED = "audio_not_resolved"
+    AUDIO_URL_EMPTY = "audio_url_empty"
+
+
+def _resolve_approved_audio_url(job: dict, payload: dict) -> tuple[str | None, str]:
+    """Resolve the approved, project-owned audio URL for a video job.
+
+    The client-supplied ``payload["audio_url"]`` is never read. Only
+    ``payload["audio_media_result_id"]`` is honoured, and it is resolved
+    through a shot- and project-constrained repository query.
+
+    Returns:
+        (url, reason). ``url`` is None whenever Sync must not run; ``reason``
+        is a stable category safe to log — it never contains the identifier,
+        the resolved URL, or any client payload.
+    """
+    raw = payload.get("audio_media_result_id")
+    if raw is None or isinstance(raw, bool):
+        return None, SyncAudioRejection.NO_AUDIO_REFERENCE
+    try:
+        media_result_id = int(raw)
+    except (TypeError, ValueError):
+        return None, SyncAudioRejection.INVALID_AUDIO_REFERENCE
+    if media_result_id < 1:
+        return None, SyncAudioRejection.INVALID_AUDIO_REFERENCE
+
+    from app.repositories import media_results
+
+    # A single constrained query proves existence, shot ownership, project
+    # ownership, media type and approval together. Missing, cross-shot,
+    # cross-project, wrong-type and unapproved records are indistinguishable
+    # here by design, so a rejection reason cannot be used to probe for the
+    # existence of records in other projects.
+    record = media_results.get_approved_audio_for_shot(
+        media_result_id,
+        job.get("shot_id"),
+        job.get("project_id"),
+    )
+    if not record:
+        return None, SyncAudioRejection.AUDIO_NOT_RESOLVED
+
+    url = record.get("url")
+    if not isinstance(url, str) or not url.strip():
+        return None, SyncAudioRejection.AUDIO_URL_EMPTY
+    return url.strip(), ""
+
+
+def _maybe_apply_sync(
+    video_url: str,
+    payload: dict,
+    *,
+    job: dict,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """Apply Sync.so lip-sync when approved dialogue audio is available.
+
+    Conditions for Sync to run:
+      - audio_mode == "dialogue"
+      - payload["audio_media_result_id"] resolves to an approved audio
+        media record owned by this job's shot and project
+      - SYNC_API_KEY is configured
+
+    ``payload["audio_url"]`` is deliberately ignored: a caller must not be
+    able to point Sync at arbitrary media. ``job`` is keyword-only and
+    required so no call site can skip project scoping.
+
+    A Sync failure is logged as a warning but never cancels the Kling video:
+    the original video_url is returned unchanged.
+
+    Returns:
+        Lip-synced video URL, or original video_url if Sync is skipped/fails.
+    """
+    if payload.get("audio_mode") != "dialogue":
+        return video_url
+
+    audio_url, rejection = _resolve_approved_audio_url(job, payload)
+    if audio_url is None:
+        if rejection != SyncAudioRejection.NO_AUDIO_REFERENCE:
+            logger.warning(
+                "Sync.so skipped — approved audio not resolved (reason=%s)", rejection
+            )
+        return video_url
+
+    from app.core.config import settings
+    if not settings.sync_api_key:
+        return video_url
+
+    from app.services.sync_provider import (
+        SyncErrorCategory,
+        apply_lip_sync,
+    )
+
+    try:
+        return apply_lip_sync(video_url, audio_url, sleep=sleep)
+    except Exception as exc:
+        # Log only a stable sanitized category. str(exc) and exc_info are
+        # never used here: provider bodies, signed URLs and the video/audio
+        # URLs under processing must not reach the log stream.
+        category = getattr(exc, "category", None)
+        if not isinstance(category, str) or not category:
+            category = (
+                SyncErrorCategory.TIMEOUT
+                if isinstance(exc, TimeoutError)
+                else SyncErrorCategory.UNEXPECTED_ERROR
+            )
+        logger.warning(
+            "Sync.so lip-sync failed — keeping Kling video (category=%s)", category
+        )
+        return video_url
 
 
 def _process_image_job(job: dict) -> dict:
@@ -98,6 +262,24 @@ def _approved_image_url(shot_id: int) -> str:
     return approved[0]["url"]
 
 
+def _submit_or_resume_kling(provider, request: VideoGenerationRequest, job: dict) -> str:
+    """Return the Kling task_id for this job, submitting at most once.
+
+    If the job already carries a persisted ``provider_task_id`` (a prior
+    attempt submitted before the worker was interrupted), that task is
+    resumed and no new submission is made — this is what keeps a retry or a
+    worker restart from creating a second, separately billed Kling job. A
+    fresh submission is persisted immediately, before any polling, so the
+    task id survives a crash in the very next instant.
+    """
+    existing_task_id = str(job.get("provider_task_id") or "").strip()
+    if existing_task_id:
+        return existing_task_id
+    task_id = provider.submit(request)
+    jobs.record_provider_task_id(job["id"], task_id)
+    return task_id
+
+
 def _process_video_job(job: dict) -> dict:
     shot = shots.get_shot(job["shot_id"])
     if not shot:
@@ -113,10 +295,31 @@ def _process_video_job(job: dict) -> dict:
         aspect_ratio=str(payload.get("aspect_ratio") or "16:9"),
         model_profile=selection.profile,
     )
-    result = get_video_provider().generate(request)
+
+    provider = get_video_provider()
+
+    from app.services.kling_provider import KlingProvider
+    if isinstance(provider, KlingProvider):
+        task_id = _submit_or_resume_kling(provider, request, job)
+        video_url = _wait_for_kling(provider, task_id)
+        from app.services.kling_provider import _model_for, _estimate_cost
+        model = _model_for(request.model_profile)
+        cost = _estimate_cost(request.duration_seconds, model)
+        result = VideoGenerationResult(
+            url=video_url,
+            provider="kling",
+            model=model,
+            external_task_id=task_id,
+            actual_cost_usd=cost,
+        )
+    else:
+        result = provider.generate(request)
+
+    final_url = _maybe_apply_sync(result.url, payload, job=job)
+
     media = shots.create_media_result(job["shot_id"], {
         "media_type": "video",
-        "url": result.url,
+        "url": final_url,
         "provider": result.provider,
         "model": result.model,
         "prompt_version_id": payload.get("prompt_version_id"),
@@ -127,6 +330,7 @@ def _process_video_job(job: dict) -> dict:
             "idempotency_key": job["idempotency_key"],
             "model_profile": selection.profile,
             "model_selection_reason": selection.reason,
+            "sync_applied": final_url != result.url,
         },
     })
     shots.update_shot(job["shot_id"], {"status": "וידאו טיוטה"})
@@ -167,9 +371,15 @@ def process_one_job(worker_id: str | None = None) -> dict | None:
 
 def run_forever() -> None:
     worker_id = _worker_id()
+    # On startup requeue anything a previous worker left mid-flight so it can
+    # be resumed (via the persisted provider_task_id) instead of stalling in
+    # 'running' forever.
+    jobs.reclaim_stale_jobs()
     while True:
         processed = process_one_job(worker_id)
         if processed is None:
+            # Idle: also sweep for jobs a crashed sibling worker abandoned.
+            jobs.reclaim_stale_jobs()
             time.sleep(IDLE_SLEEP_SECONDS)
 
 
