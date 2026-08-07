@@ -100,8 +100,22 @@ class ImportRunsApiTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 502)
         self.assertEqual(raised.exception.detail["code"], "screenplay_chunk_failure")
+        self.assertEqual(raised.exception.detail["failure_category"], "invalid_response")
         self.assertTrue(raised.exception.detail["retryable"])
         self.assertNotIn("provider payload", str(raised.exception.detail))
+
+    @patch("app.api.import_runs.process_next_chunk", side_effect=RuntimeError("SECRET_SENTINEL"))
+    @patch("app.api.import_runs.project_repo.get_project", return_value={"id": 7})
+    def test_provider_failure_log_contains_category_but_not_exception(self, _get_project, _process_next):
+        with self.assertLogs("app.api.import_runs", level="WARNING") as captured:
+            with self.assertRaises(HTTPException):
+                process_next_import_chunk(
+                    ImportRunStepRequest(project_id=7, screenplay="א" * 80)
+                )
+
+        rendered = "\n".join(captured.output)
+        self.assertIn("category=invalid_response", rendered)
+        self.assertNotIn("SECRET_SENTINEL", rendered)
 
     @patch("app.api.import_runs.scene_repo.import_scenes")
     @patch("app.api.import_runs.scene_repo.list_scenes", return_value=[])

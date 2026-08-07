@@ -33,7 +33,34 @@ class SmokeFailure(RuntimeError):
 
 class RetryableChunkFailure(SmokeFailure):
     """process-next returned HTTP 502 with retryable=True; the caller may retry the same chunk."""
-    pass
+
+    def __init__(self, message: str, *, category: str = "unknown"):
+        super().__init__(message)
+        self.category = category
+
+
+_SAFE_PROVIDER_FAILURE_CATEGORIES = frozenset({
+    "not_configured",
+    "authentication",
+    "permission",
+    "model_unavailable",
+    "invalid_request",
+    "rate_limit",
+    "timeout",
+    "connection",
+    "provider_unavailable",
+    "invalid_response",
+    "unknown",
+})
+
+
+def _safe_failure_category(detail: Any) -> str:
+    if not isinstance(detail, dict):
+        return "unknown"
+    candidate = detail.get("failure_category")
+    if isinstance(candidate, str) and candidate in _SAFE_PROVIDER_FAILURE_CATEGORIES:
+        return candidate
+    return "unknown"
 
 
 @dataclass(frozen=True)
@@ -76,9 +103,15 @@ def _request_json(
             try:
                 error_body = json.loads(exc.read(4096).decode("utf-8"))
                 detail = error_body.get("detail") if isinstance(error_body, dict) else None
+                category = _safe_failure_category(detail)
                 if isinstance(detail, dict) and detail.get("retryable") is True:
                     raise RetryableChunkFailure(
-                        f"{method} {path} returned retryable HTTP 502"
+                        f"{method} {path} returned retryable HTTP 502 ({category})",
+                        category=category,
+                    ) from exc
+                if isinstance(detail, dict) and detail.get("retryable") is False:
+                    raise SmokeFailure(
+                        f"{method} {path} returned non-retryable HTTP 502 ({category})"
                     ) from exc
             except (json.JSONDecodeError, UnicodeDecodeError, OSError, AttributeError):
                 pass
@@ -134,6 +167,7 @@ def _run_resumable_import(
     state = build_import_payload(config)
     chunk_count = 0
     for _ in range(1000):
+        last_failure_category = "unknown"
         for chunk_attempt in range(1, _MAX_CHUNK_ATTEMPTS + 1):
             try:
                 response = _request_json(
@@ -143,10 +177,12 @@ def _run_resumable_import(
                     payload=state,
                 )
                 break
-            except RetryableChunkFailure:
+            except RetryableChunkFailure as exc:
+                last_failure_category = exc.category
                 if chunk_attempt == _MAX_CHUNK_ATTEMPTS:
                     raise SmokeFailure(
-                        f"process-next chunk failed after {_MAX_CHUNK_ATTEMPTS} attempts"
+                        "process-next chunk failed after "
+                        f"{_MAX_CHUNK_ATTEMPTS} attempts ({last_failure_category})"
                     )
                 time.sleep(2 ** chunk_attempt)
         if not isinstance(response, dict):

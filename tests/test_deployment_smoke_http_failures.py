@@ -60,7 +60,7 @@ class DeploymentSmokeHttpFailureTests(unittest.TestCase):
 
     @patch("scripts.deployment_smoke.urlopen")
     def test_retryable_502_raises_retryable_chunk_failure(self, urlopen):
-        retryable_body = b'{"detail":{"message":"transient","code":"screenplay_chunk_failure","retryable":true}}'
+        retryable_body = b'{"detail":{"message":"transient","code":"screenplay_chunk_failure","failure_category":"rate_limit","retryable":true}}'
         urlopen.side_effect = HTTPError(
             url="https://example.invalid/api/import-runs/process-next",
             code=502,
@@ -80,8 +80,55 @@ class DeploymentSmokeHttpFailureTests(unittest.TestCase):
         message = str(captured.exception)
         self.assertIn("POST /api/import-runs/process-next", message)
         self.assertIn("retryable HTTP 502", message)
+        self.assertIn("rate_limit", message)
+        self.assertEqual(captured.exception.category, "rate_limit")
         self.assertNotIn("transient", message)
         self.assertNotIn("screenplay_chunk_failure", message)
+
+    @patch("scripts.deployment_smoke.urlopen")
+    def test_unknown_failure_category_is_not_echoed(self, urlopen):
+        retryable_body = b'{"detail":{"failure_category":"SECRET_SENTINEL","retryable":true}}'
+        urlopen.side_effect = HTTPError(
+            url="https://example.invalid/api/import-runs/process-next",
+            code=502,
+            msg="Bad Gateway",
+            hdrs={"Content-Type": "application/json"},
+            fp=io.BytesIO(retryable_body),
+        )
+
+        with self.assertRaises(RetryableChunkFailure) as captured:
+            _request_json(
+                self.config,
+                "/api/import-runs/process-next",
+                method="POST",
+                payload={"project_id": 7},
+            )
+
+        self.assertEqual(captured.exception.category, "unknown")
+        self.assertNotIn("SECRET_SENTINEL", str(captured.exception))
+
+    @patch("scripts.deployment_smoke.urlopen")
+    def test_non_retryable_failure_reports_only_safe_category(self, urlopen):
+        body = b'{"detail":{"message":"SECRET_SENTINEL","failure_category":"authentication","retryable":false}}'
+        urlopen.side_effect = HTTPError(
+            url="https://example.invalid/api/import-runs/process-next",
+            code=502,
+            msg="Bad Gateway",
+            hdrs={"Content-Type": "application/json"},
+            fp=io.BytesIO(body),
+        )
+
+        with self.assertRaises(SmokeFailure) as captured:
+            _request_json(
+                self.config,
+                "/api/import-runs/process-next",
+                method="POST",
+                payload={"project_id": 7},
+            )
+
+        self.assertNotIsInstance(captured.exception, RetryableChunkFailure)
+        self.assertIn("authentication", str(captured.exception))
+        self.assertNotIn("SECRET_SENTINEL", str(captured.exception))
 
     @patch("scripts.deployment_smoke.urlopen")
     def test_retryable_chunk_failure_is_subclass_of_smoke_failure(self, urlopen):
