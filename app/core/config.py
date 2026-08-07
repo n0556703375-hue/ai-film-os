@@ -36,15 +36,14 @@ class Settings:
     magnific_resolution = os.getenv("MAGNIFIC_RESOLUTION", "2K")
     generated_media_path = Path(os.getenv("GENERATED_MEDIA_PATH", BASE_DIR / "generated"))
     port = int(os.getenv("PORT", "8000"))
-    # Kling authenticates with an AccessKey/SecretKey pair that signs a
-    # short-lived HS256 JWT per request; there is no long-lived bearer key.
-    kling_access_key = os.getenv("KLING_ACCESS_KEY", "").strip()
-    kling_secret_key = os.getenv("KLING_SECRET_KEY", "").strip()
-    kling_api_base = os.getenv("KLING_API_BASE", KLING_DEFAULT_API_BASE).rstrip("/")
-    kling_default_model = os.getenv("KLING_DEFAULT_MODEL", KLING_FALLBACK_MODEL)
+    # Seedance via fal.ai
+    fal_api_key = os.getenv("FAL_API_KEY", "").strip()
+    fal_api_base = os.getenv("FAL_API_BASE", "https://queue.fal.run").rstrip("/")
+    fal_seedance_model = os.getenv("FAL_SEEDANCE_MODEL", "bytedance/seedance-2.0/image-to-video")
+    fal_seedance_fast_model = os.getenv("FAL_SEEDANCE_FAST_MODEL", "bytedance/seedance-2.0/image-to-video-fast")
+    # Sync.so lip-sync (future use)
     sync_api_key = os.getenv("SYNC_API_KEY", "").strip()
     sync_api_base = os.getenv("SYNC_API_BASE", SYNC_DEFAULT_API_BASE).rstrip("/")
-    sync_default_model = os.getenv("SYNC_DEFAULT_MODEL", SYNC_FALLBACK_MODEL).strip()
 
 
 settings = Settings()

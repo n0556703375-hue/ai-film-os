@@ -43,16 +43,16 @@ class DisabledVideoProvider:
 
 
 def get_video_provider() -> VideoProvider:
-    # Provider selection stays centralized here. A concrete provider adapter can be
-    # added without changing the queue, API, approval pipeline, or media storage.
-    #
-    # Kling requires both halves of the AccessKey/SecretKey pair to sign its
-    # short-lived JWT; a partially configured environment stays disabled rather
-    # than failing later inside the worker.
+    """Return the configured video provider.
+
+    Priority:
+      1. FAL_API_KEY set → SeedanceProvider (Seedance 2.0 via fal.ai)
+      2. Fallback → DisabledVideoProvider (safe no-op)
+    """
     import os
 
-    if os.getenv("KLING_ACCESS_KEY", "").strip() and os.getenv("KLING_SECRET_KEY", "").strip():
-        from app.services.kling_provider import KlingProvider
+    if os.getenv("FAL_API_KEY", "").strip():
+        from app.services.seedance_provider import SeedanceProvider
 
-        return KlingProvider()
+        return SeedanceProvider()
     return DisabledVideoProvider()
