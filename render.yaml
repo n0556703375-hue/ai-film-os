@@ -6,15 +6,14 @@ services:
     startCommand: python run.py
     healthCheckPath: /health
     envVars:
+      - key: FILM_OS_DB
+        value: /var/data/film_os.db
       - key: GENERATED_MEDIA_PATH
         value: /var/data/generated
-    # Render's actual free tier has NO persistent disk option — disks require
-    # a paid plan (Starter or higher). This block only takes effect once the
-    # service is on such a plan; on free tier, /var/data does not exist and
-    # GENERATED_MEDIA_PATH falls back to the app's own (ephemeral) directory,
-    # so uploaded images are lost on every deploy/restart. See README for the
-    # full tradeoff — the alternative is external object storage, which needs
-    # its own credentials and is not configured here.
+    # Production currently runs on a paid Render plan with a persistent disk.
+    # Both the SQLite database and generated media must live under /var/data
+    # so project state, approvals, jobs, uploaded images, and generated videos
+    # survive deploys and restarts.
     disk:
       name: ai-film-os-media
       mountPath: /var/data
