@@ -6,7 +6,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.repositories import jobs, shots
+from app.services.public_media_url import PublicMediaUrlError, normalize_public_media_url, preflight_check_public_image
 from app.services.video_model_selector import select_video_model
+from app.services.video_provider import DisabledVideoProvider, VideoProviderNotConfigured, get_video_provider
 
 
 router = APIRouter(prefix="/api/video-generation", tags=["video-generation"])
@@ -66,6 +68,64 @@ def _normalized_video_job_status(job: dict) -> dict:
         "attempts_remaining": max(max_attempts - attempts, 0),
         "updated_at": job.get("updated_at"),
         "finished_at": job.get("finished_at"),
+    }
+
+
+@router.get("/shots/{shot_id}/readiness")
+def get_shot_readiness(shot_id: int):
+    """Report whether a shot is ready for Generate Video — never submits to the provider.
+
+    Every check here is read-only / non-billing: the approved-image lookup,
+    the public-URL preflight (a bounded reachability fetch, not a fal.ai
+    submission), instantiating the configured provider (which only reads
+    env vars), and checking the background worker thread's liveness. The UI
+    calls this before enabling the Generate Video button so a doomed
+    submission never happens in the first place.
+    """
+    shot = shots.get_shot(shot_id)
+    if not shot:
+        raise HTTPException(404, "השוט לא נמצא.")
+
+    reasons: list[str] = []
+
+    image = _approved_image(shot_id)
+    approved_image = image is not None
+    if not approved_image:
+        reasons.append("no_approved_image")
+
+    image_publicly_accessible = False
+    if approved_image:
+        try:
+            public_url = normalize_public_media_url(image["url"])
+            preflight_check_public_image(public_url)
+            image_publicly_accessible = True
+        except PublicMediaUrlError as exc:
+            reasons.append(f"image_not_publicly_accessible:{exc.reason}")
+
+    provider_configured = False
+    try:
+        provider = get_video_provider()
+        provider_configured = not isinstance(provider, DisabledVideoProvider)
+    except VideoProviderNotConfigured:
+        provider_configured = False
+    if not provider_configured:
+        reasons.append("provider_not_configured")
+
+    from app import background_worker
+
+    worker_alive = background_worker.is_alive()
+    if not worker_alive:
+        reasons.append("worker_not_alive")
+
+    ready = approved_image and image_publicly_accessible and provider_configured and worker_alive
+
+    return {
+        "ready": ready,
+        "approved_image": approved_image,
+        "image_publicly_accessible": image_publicly_accessible,
+        "provider_configured": provider_configured,
+        "worker_alive": worker_alive,
+        "reasons": reasons,
     }
 
 
