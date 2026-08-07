@@ -5,8 +5,8 @@ Environment variables required:
     FAL_SEEDANCE_MODEL      — optional override (default: bytedance/seedance-2.0/image-to-video)
     FAL_SEEDANCE_FAST_MODEL — fast tier (default: bytedance/seedance-2.0/fast/image-to-video)
 
-The provider intentionally delegates submit/poll/result URL handling to fal.ai's
-official Python client instead of reconstructing queue URLs manually.
+The provider delegates submit/poll/result handling to fal.ai's official Python
+client and sends only fields accepted by the current Seedance 2.0 schema.
 """
 
 import os
@@ -33,9 +33,12 @@ _CAMERA_MOTION_PHRASES = {
     "static": "static locked-off camera",
 }
 
+_ALLOWED_ASPECT_RATIOS = {"auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}
+
+# fal.ai Seedance 2.0 720p rates at the time this integration was updated.
 _COST_PER_SECOND = {
-    "bytedance/seedance-2.0/image-to-video": 0.045,
-    "bytedance/seedance-2.0/fast/image-to-video": 0.025,
+    "bytedance/seedance-2.0/image-to-video": 0.3034,
+    "bytedance/seedance-2.0/fast/image-to-video": 0.2419,
 }
 
 
@@ -61,9 +64,26 @@ def _model_for(profile: str) -> str:
     return settings.fal_seedance_model
 
 
+def _duration_for(duration_seconds: float) -> str:
+    """Return a Seedance-supported duration enum value (4..15 seconds)."""
+    try:
+        duration = int(round(float(duration_seconds)))
+    except (TypeError, ValueError):
+        duration = 5
+    return str(max(4, min(15, duration)))
+
+
+def _aspect_ratio_for(aspect_ratio: str) -> str:
+    value = (aspect_ratio or "auto").strip()
+    if value in _ALLOWED_ASPECT_RATIOS:
+        return value
+    return "auto"
+
+
 def _estimate_cost(duration_seconds: float, model: str) -> float:
-    rate = _COST_PER_SECOND.get(model, 0.045)
-    return round(rate * max(duration_seconds, 5), 4)
+    rate = _COST_PER_SECOND.get(model, 0.3034)
+    duration = int(_duration_for(duration_seconds))
+    return round(rate * duration, 4)
 
 
 def _extract_video_url(body: dict) -> str:
@@ -107,22 +127,17 @@ class SeedanceProvider:
         """Submit a video generation request and wait for the official client result."""
         model = _model_for(request.model_profile)
 
+        # Seedance 2.0 accepts resolution/aspect_ratio enums rather than raw
+        # width/height. AI Film OS keeps audio generation separate, so native
+        # Seedance audio is explicitly disabled here.
         payload = {
             "image_url": request.image_url,
             "prompt": _build_prompt(request),
-            "duration": int(max(1, min(10, request.duration_seconds))),
-            "height": 1080,
-            "width": 1920,
+            "duration": _duration_for(request.duration_seconds),
+            "resolution": "720p",
+            "aspect_ratio": _aspect_ratio_for(request.aspect_ratio),
+            "generate_audio": False,
         }
-
-        if request.aspect_ratio:
-            try:
-                w, h = map(int, request.aspect_ratio.split(":"))
-                if w > 0 and h > 0:
-                    payload["width"] = w
-                    payload["height"] = h
-            except (ValueError, AttributeError):
-                pass
 
         try:
             handler = fal_client.submit(model, arguments=payload)
