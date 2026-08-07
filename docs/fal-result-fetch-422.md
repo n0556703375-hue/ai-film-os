@@ -1,1 +1,0 @@
-Temporary regression note: fal REST queue submit/status responses may expose a convenience response_url ending in /response, while the documented REST result retrieval example uses GET on the bare request URL /requests/{request_id}. The provider normalizes the returned response_url to that documented result URL before fetching the completed payload.
