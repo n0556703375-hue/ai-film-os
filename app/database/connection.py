@@ -69,6 +69,7 @@ def migrate_database(conn: sqlite3.Connection) -> None:
     _add_columns(conn, "media_jobs", {
         "estimated_cost_usd": "REAL NOT NULL DEFAULT 0",
         "actual_cost_usd": "REAL NOT NULL DEFAULT 0",
+        "provider_task_id": "TEXT NOT NULL DEFAULT ''",
     })
     conn.execute("""
         CREATE TABLE IF NOT EXISTS scene_asset_variants (

@@ -1,10 +1,15 @@
 import json
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 
 from app.database.connection import get_connection
 
 ACTIVE_STATUSES = {"queued", "running", "retrying"}
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+
+# A running job whose worker has gone silent longer than this is presumed
+# orphaned (crash / redeploy) and is requeued so a fresh worker can resume it.
+STALE_RUNNING_SECONDS = 900
 
 
 def enqueue_job(project_id: int, shot_id: int, job_type: str, payload: dict, idempotency_key: str, max_attempts: int = 3, estimated_cost_usd: float = 0):
@@ -89,6 +94,74 @@ def fail_job(job_id: int, error: str, retryable: bool = True):
         )
         conn.commit()
     return get_job(job_id)
+
+
+def record_provider_task_id(job_id: int, provider_task_id: str):
+    """Persist the external provider task id for a running job.
+
+    Written immediately after the provider accepts a submission so that a
+    retry or worker restart resumes polling the existing task instead of
+    submitting a second, duplicate (and separately billed) job. Persisting a
+    task id never advances or regresses the job's own status.
+    """
+    task_id = str(provider_task_id or "").strip()
+    if not task_id:
+        raise ValueError("מזהה משימת הספק אינו יכול להיות ריק.")
+    with closing(get_connection()) as conn:
+        if not conn.execute("SELECT 1 FROM media_jobs WHERE id=?", (job_id,)).fetchone():
+            return None
+        conn.execute(
+            "UPDATE media_jobs SET provider_task_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (task_id, job_id),
+        )
+        conn.commit()
+    return get_job(job_id)
+
+
+def reclaim_stale_jobs(stale_after_seconds: float = STALE_RUNNING_SECONDS):
+    """Requeue jobs orphaned in 'running' so a restarted worker can resume them.
+
+    A worker that crashes or is redeployed mid-poll leaves its claimed job in
+    'running' with no live owner; ``claim_next_job`` only picks 'queued' and
+    'retrying', so such a job would never be reclaimed. This moves any running
+    job whose last update predates the stale window back to 'retrying' (or to
+    'failed' once its bounded attempts are exhausted). The persisted
+    ``provider_task_id`` lets the resumed job continue polling the same
+    provider task rather than resubmitting.
+
+    Returns the list of reclaimed job ids.
+    """
+    if stale_after_seconds < 0:
+        raise ValueError("חלון הזמן לשחזור משימות אינו יכול להיות שלילי.")
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    reclaimed: list[int] = []
+    with closing(get_connection()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            """
+            SELECT id, attempts, max_attempts FROM media_jobs
+            WHERE status='running'
+              AND (updated_at IS NULL OR updated_at < ?)
+            ORDER BY id ASC
+            """,
+            (cutoff,),
+        ).fetchall()
+        for row in rows:
+            new_status = "retrying" if row["attempts"] < row["max_attempts"] else "failed"
+            conn.execute(
+                """
+                UPDATE media_jobs SET status=?,worker_id='',
+                    finished_at=CASE WHEN ?='failed' THEN CURRENT_TIMESTAMP ELSE NULL END,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+                """,
+                (new_status, new_status, row["id"]),
+            )
+            reclaimed.append(row["id"])
+        conn.commit()
+    return reclaimed
 
 
 def retry_failed_job(job_id: int):

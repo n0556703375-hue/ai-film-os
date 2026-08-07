@@ -43,6 +43,21 @@ class DisabledVideoProvider:
 
 
 def get_video_provider() -> VideoProvider:
-    # Provider selection stays centralized here. A concrete provider adapter can be
-    # added without changing the queue, API, approval pipeline, or media storage.
+    """Return the configured video provider.
+
+    Priority:
+      1. FAL_API_KEY set → SeedanceProvider (Seedance 2.0 via fal.ai, primary)
+      2. Both KLING_ACCESS_KEY and KLING_SECRET_KEY set → KlingProvider (legacy)
+      3. Fallback → DisabledVideoProvider (safe no-op)
+    """
+    import os
+
+    if os.getenv("FAL_API_KEY", "").strip():
+        from app.services.seedance_provider import SeedanceProvider
+
+        return SeedanceProvider()
+    if os.getenv("KLING_ACCESS_KEY", "").strip() and os.getenv("KLING_SECRET_KEY", "").strip():
+        from app.services.kling_provider import KlingProvider
+
+        return KlingProvider()
     return DisabledVideoProvider()
