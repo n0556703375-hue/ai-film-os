@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from app.models.schemas import AssetLinkRequest, MediaResultCreate, ShotCreate, ShotUpdate
 from app.repositories import shots as repo
 from app.repositories import issues as issue_repo
 from app.services.prompt_builder import build_prompt
 from app.services.continuity import check_shot_continuity
 from app.services.director import run_director
+from app.services.media_upload import MediaUploadError, validate_and_store_upload
 
 router = APIRouter(prefix="/api/shots", tags=["shots"])
 
@@ -106,6 +107,39 @@ def create_media_result(shot_id: int, media: MediaResultCreate):
         result = repo.create_media_result(shot_id, media.model_dump())
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    if not result:
+        raise HTTPException(404, "השוט לא נמצא.")
+    return result
+
+@router.post("/{shot_id}/media/upload")
+async def upload_media(shot_id: int, file: UploadFile = File(...)):
+    """Upload an image file directly from the user's computer.
+
+    This is the primary way to add a shot's source image — the client sends
+    the file itself (multipart/form-data), not a URL. The file is validated
+    (MIME type, size, and that it actually decodes as an image), stored
+    under a fresh UUID filename, and its media_result is created in the same
+    request so the frontend doesn't need a second call.
+    """
+    if not repo.get_shot(shot_id):
+        raise HTTPException(404, "השוט לא נמצא.")
+    content = await file.read()
+    try:
+        stored = validate_and_store_upload(shot_id, file.content_type or "", content)
+    except MediaUploadError as exc:
+        raise HTTPException(400, exc.reason)
+    result = repo.create_media_result(shot_id, {
+        "media_type": "image",
+        "url": stored["url"],
+        "provider": "upload",
+        "status": "טיוטה",
+        "metadata": {
+            # Informational only — never used to build a filesystem path.
+            "original_filename": (file.filename or "")[:255],
+            "size_bytes": stored["size_bytes"],
+            "content_type": stored["content_type"],
+        },
+    })
     if not result:
         raise HTTPException(404, "השוט לא נמצא.")
     return result
