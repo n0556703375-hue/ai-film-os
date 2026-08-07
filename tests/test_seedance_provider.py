@@ -44,7 +44,7 @@ class SeedanceProviderClientTests(unittest.TestCase):
         self.assertEqual(os.environ.get("FAL_KEY"), "test-key")
 
     @patch("app.services.seedance_provider.fal_client.submit")
-    def test_generate_uses_official_submit_and_get(self, mock_submit):
+    def test_generate_uses_current_seedance_schema(self, mock_submit):
         handler = MagicMock()
         handler.request_id = "req-1"
         handler.get.return_value = {
@@ -58,13 +58,61 @@ class SeedanceProviderClientTests(unittest.TestCase):
         self.assertEqual(result.external_task_id, "req-1")
         self.assertEqual(result.provider, "seedance")
         self.assertEqual(result.model, settings.fal_seedance_model)
-        mock_submit.assert_called_once()
+
         model, = mock_submit.call_args.args
         self.assertEqual(model, settings.fal_seedance_model)
         payload = mock_submit.call_args.kwargs["arguments"]
         self.assertEqual(payload["image_url"], self.request.image_url)
         self.assertIn("subtle cinematic motion", payload["prompt"])
+        self.assertEqual(payload["duration"], "5")
+        self.assertEqual(payload["resolution"], "720p")
+        self.assertEqual(payload["aspect_ratio"], "16:9")
+        self.assertFalse(payload["generate_audio"])
+        self.assertNotIn("height", payload)
+        self.assertNotIn("width", payload)
         handler.get.assert_called_once_with()
+
+    @patch("app.services.seedance_provider.fal_client.submit")
+    def test_duration_is_clamped_to_supported_seedance_range(self, mock_submit):
+        handler = MagicMock()
+        handler.request_id = "req-duration"
+        handler.get.return_value = {"video": {"url": "https://cdn.example/video.mp4"}}
+        mock_submit.return_value = handler
+
+        short = VideoGenerationRequest(
+            image_url=self.request.image_url,
+            prompt=self.request.prompt,
+            duration_seconds=2,
+            aspect_ratio="16:9",
+        )
+        SeedanceProvider().generate(short)
+        self.assertEqual(mock_submit.call_args.kwargs["arguments"]["duration"], "4")
+
+        long = VideoGenerationRequest(
+            image_url=self.request.image_url,
+            prompt=self.request.prompt,
+            duration_seconds=30,
+            aspect_ratio="16:9",
+        )
+        SeedanceProvider().generate(long)
+        self.assertEqual(mock_submit.call_args.kwargs["arguments"]["duration"], "15")
+
+    @patch("app.services.seedance_provider.fal_client.submit")
+    def test_invalid_aspect_ratio_falls_back_to_auto(self, mock_submit):
+        handler = MagicMock()
+        handler.request_id = "req-ratio"
+        handler.get.return_value = {"video": {"url": "https://cdn.example/video.mp4"}}
+        mock_submit.return_value = handler
+        request = VideoGenerationRequest(
+            image_url=self.request.image_url,
+            prompt=self.request.prompt,
+            duration_seconds=5,
+            aspect_ratio="1920:1080",
+        )
+
+        SeedanceProvider().generate(request)
+
+        self.assertEqual(mock_submit.call_args.kwargs["arguments"]["aspect_ratio"], "auto")
 
     @patch("app.services.seedance_provider.fal_client.submit")
     def test_generate_preserves_fast_model_selection(self, mock_submit):
