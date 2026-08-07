@@ -29,10 +29,11 @@ class SeedanceProviderQueueTests(unittest.TestCase):
 
     @patch("app.services.seedance_provider.time.sleep", return_value=None)
     @patch("app.services.seedance_provider.httpx.Client")
-    def test_generate_uses_queue_urls_returned_by_submit(self, mock_client_cls, _sleep):
+    def test_generate_uses_returned_status_url_and_documented_result_url(self, mock_client_cls, _sleep):
         client = mock_client_cls.return_value.__enter__.return_value
         status_url = "https://queue.fal.run/canonical/model/requests/req-1/status"
         response_url = "https://queue.fal.run/canonical/model/requests/req-1/response"
+        result_url = "https://queue.fal.run/canonical/model/requests/req-1"
         client.post.return_value = httpx.Response(
             202,
             json={
@@ -51,7 +52,7 @@ class SeedanceProviderQueueTests(unittest.TestCase):
             httpx.Response(
                 200,
                 json={"video": {"url": "https://cdn.example/video.mp4"}},
-                request=httpx.Request("GET", response_url),
+                request=httpx.Request("GET", result_url),
             ),
         ]
 
@@ -60,15 +61,15 @@ class SeedanceProviderQueueTests(unittest.TestCase):
         self.assertEqual(result.url, "https://cdn.example/video.mp4")
         self.assertEqual(result.external_task_id, "req-1")
         requested_urls = [call.args[0] for call in client.get.call_args_list]
-        self.assertEqual(requested_urls, [status_url, response_url])
+        self.assertEqual(requested_urls, [status_url, result_url])
 
     @patch("app.services.seedance_provider.time.sleep", return_value=None)
     @patch("app.services.seedance_provider.httpx.Client")
-    def test_generate_fallback_result_url_uses_response_suffix(self, mock_client_cls, _sleep):
+    def test_generate_fallback_result_url_has_no_response_suffix(self, mock_client_cls, _sleep):
         client = mock_client_cls.return_value.__enter__.return_value
         model = settings.fal_seedance_model
         status_url = f"https://queue.fal.run/{model}/requests/req-2/status"
-        response_url = f"https://queue.fal.run/{model}/requests/req-2/response"
+        result_url = f"https://queue.fal.run/{model}/requests/req-2"
         client.post.return_value = httpx.Response(
             202,
             json={"request_id": "req-2"},
@@ -83,14 +84,14 @@ class SeedanceProviderQueueTests(unittest.TestCase):
             httpx.Response(
                 200,
                 json={"video": {"url": "https://cdn.example/video-2.mp4"}},
-                request=httpx.Request("GET", response_url),
+                request=httpx.Request("GET", result_url),
             ),
         ]
 
         SeedanceProvider().generate(self.request)
 
         requested_urls = [call.args[0] for call in client.get.call_args_list]
-        self.assertEqual(requested_urls, [status_url, response_url])
+        self.assertEqual(requested_urls, [status_url, result_url])
 
     @patch("app.services.seedance_provider.httpx.Client")
     def test_generate_rejects_provider_queue_url_on_untrusted_host(self, mock_client_cls):
@@ -111,10 +112,11 @@ class SeedanceProviderQueueTests(unittest.TestCase):
 
     @patch("app.services.seedance_provider.time.sleep", return_value=None)
     @patch("app.services.seedance_provider.httpx.Client")
-    def test_polling_405_does_not_expose_provider_body(self, mock_client_cls, _sleep):
+    def test_result_fetch_error_does_not_expose_provider_body(self, mock_client_cls, _sleep):
         client = mock_client_cls.return_value.__enter__.return_value
         status_url = "https://queue.fal.run/model/requests/req-4/status"
         response_url = "https://queue.fal.run/model/requests/req-4/response"
+        result_url = "https://queue.fal.run/model/requests/req-4"
         client.post.return_value = httpx.Response(
             202,
             json={
@@ -125,17 +127,24 @@ class SeedanceProviderQueueTests(unittest.TestCase):
             request=httpx.Request("POST", "https://queue.fal.run/model"),
         )
         secret_body = "signed_url=https://private.example/token=secret-provider-value"
-        client.get.return_value = httpx.Response(
-            405,
-            text=secret_body,
-            request=httpx.Request("GET", status_url),
-        )
+        client.get.side_effect = [
+            httpx.Response(
+                200,
+                json={"status": "COMPLETED"},
+                request=httpx.Request("GET", status_url),
+            ),
+            httpx.Response(
+                422,
+                text=secret_body,
+                request=httpx.Request("GET", result_url),
+            ),
+        ]
 
         with self.assertRaises(RuntimeError) as ctx:
             SeedanceProvider().generate(self.request)
 
         message = str(ctx.exception)
-        self.assertIn("HTTP 405", message)
+        self.assertIn("HTTP 422", message)
         self.assertNotIn(secret_body, message)
         self.assertNotIn("secret-provider-value", message)
 
