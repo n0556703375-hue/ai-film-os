@@ -2,7 +2,17 @@ import json
 import re
 import threading
 
-from openai import APIConnectionError, APITimeoutError, RateLimitError
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AuthenticationError,
+    BadRequestError,
+    InternalServerError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+)
 
 from app.core.config import settings
 from app.services.generation import GenerationNotConfigured, _openai_client
@@ -16,6 +26,38 @@ MAX_CHUNK_CHARACTERS = 3000
 PROVIDER_TIMEOUT_SECONDS = 90.0
 MAX_PROVIDER_ATTEMPTS = 1
 TRANSIENT_PROVIDER_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError)
+
+
+def classify_provider_failure(exc: Exception) -> tuple[str, bool]:
+    """Return a stable, non-sensitive failure category and retry decision.
+
+    Provider exception strings and response bodies may contain request data or
+    account details, so callers must never expose them.  The returned category
+    is selected from a fixed allowlist and is safe for logs and smoke results.
+    """
+    if isinstance(exc, GenerationNotConfigured):
+        return "not_configured", False
+    if isinstance(exc, AuthenticationError):
+        return "authentication", False
+    if isinstance(exc, PermissionDeniedError):
+        return "permission", False
+    if isinstance(exc, NotFoundError):
+        return "model_unavailable", False
+    if isinstance(exc, BadRequestError):
+        return "invalid_request", False
+    if isinstance(exc, RateLimitError):
+        return "rate_limit", True
+    if isinstance(exc, APITimeoutError):
+        return "timeout", True
+    if isinstance(exc, APIConnectionError):
+        return "connection", True
+    if isinstance(exc, InternalServerError):
+        return "provider_unavailable", True
+    if isinstance(exc, APIStatusError):
+        return "provider_unavailable", exc.status_code >= 500
+    if isinstance(exc, RuntimeError):
+        return "invalid_response", True
+    return "unknown", True
 
 # Maximum concurrent in-flight provider threads. When timed-out daemon threads
 # remain alive after their deadline (Python cannot forcibly terminate them once

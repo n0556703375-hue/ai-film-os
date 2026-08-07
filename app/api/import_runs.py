@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
@@ -10,8 +11,10 @@ from app.services.resumable_screenplay_import import (
     process_next_chunk,
     serialize_state,
 )
+from app.services.screenplay_breakdown import classify_provider_failure
 
 router = APIRouter(prefix="/api/import-runs", tags=["import-runs"])
+logger = logging.getLogger(__name__)
 
 
 class ImportRunStepRequest(BaseModel):
@@ -82,12 +85,19 @@ def process_next_import_chunk(request: ImportRunStepRequest):
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     except Exception as exc:
+        failure_category, retryable = classify_provider_failure(exc)
+        logger.warning(
+            "screenplay chunk failure category=%s retryable=%s",
+            failure_category,
+            retryable,
+        )
         raise HTTPException(
             502,
             {
                 "message": "פירוק מקטע התסריט נעצר עקב תקלה זמנית.",
                 "code": "screenplay_chunk_failure",
-                "retryable": True,
+                "failure_category": failure_category,
+                "retryable": retryable,
                 "next_chunk_index": state.next_chunk_index,
                 "chunk_count": state.chunk_count,
             },

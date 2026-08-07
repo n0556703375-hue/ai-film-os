@@ -4,15 +4,27 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from openai import APIConnectionError, APITimeoutError
+import httpx
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AuthenticationError,
+    BadRequestError,
+    InternalServerError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+)
 
 import app.services.screenplay_breakdown as _breakdown_module
+from app.services.generation import GenerationNotConfigured
 from app.services.screenplay_breakdown import (
     MAX_CHUNK_CHARACTERS,
     MAX_PROVIDER_ATTEMPTS,
     PROVIDER_TIMEOUT_SECONDS,
     _request_breakdown,
     _split_screenplay,
+    classify_provider_failure,
 )
 
 # Tiny timeout used in deadline tests so they run fast and daemon threads
@@ -30,6 +42,66 @@ class ScreenplayBreakdownRetryTests(unittest.TestCase):
         # Replace the module-level semaphore with a fresh one so stuck daemon
         # threads from previous tests cannot exhaust capacity for the next test.
         _breakdown_module._PROVIDER_SEMAPHORE = threading.Semaphore(4)
+
+    def test_provider_failures_are_classified_without_reading_error_text(self):
+        request = httpx.Request("POST", "https://provider.invalid/v1/responses")
+
+        def response(status_code):
+            return httpx.Response(status_code, request=request)
+
+        cases = [
+            (
+                GenerationNotConfigured("SECRET_SENTINEL"),
+                ("not_configured", False),
+            ),
+            (
+                AuthenticationError(
+                    "SECRET_SENTINEL", response=response(401), body=None
+                ),
+                ("authentication", False),
+            ),
+            (
+                PermissionDeniedError(
+                    "SECRET_SENTINEL", response=response(403), body=None
+                ),
+                ("permission", False),
+            ),
+            (
+                NotFoundError(
+                    "SECRET_SENTINEL", response=response(404), body=None
+                ),
+                ("model_unavailable", False),
+            ),
+            (
+                BadRequestError(
+                    "SECRET_SENTINEL", response=response(400), body=None
+                ),
+                ("invalid_request", False),
+            ),
+            (
+                RateLimitError(
+                    "SECRET_SENTINEL", response=response(429), body=None
+                ),
+                ("rate_limit", True),
+            ),
+            (APITimeoutError(request), ("timeout", True)),
+            (
+                APIConnectionError(message="SECRET_SENTINEL", request=request),
+                ("connection", True),
+            ),
+            (
+                InternalServerError(
+                    "SECRET_SENTINEL", response=response(503), body=None
+                ),
+                ("provider_unavailable", True),
+            ),
+            (RuntimeError("SECRET_SENTINEL"), ("invalid_response", True)),
+            (Exception("SECRET_SENTINEL"), ("unknown", True)),
+        ]
+
+        for error, expected in cases:
+            with self.subTest(error=type(error).__name__):
+                self.assertEqual(classify_provider_failure(error), expected)
 
     # --- Original retry contract tests ---
 
