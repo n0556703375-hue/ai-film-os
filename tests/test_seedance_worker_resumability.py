@@ -157,6 +157,22 @@ class SeedanceWorkerResumabilityTests(unittest.TestCase):
         self.assertEqual(shots.get_shot(self.shot["id"])["status"], "וידאו טיוטה")
         self.assertEqual(jobs.get_job(job["id"])["provider_task_id"], fake.task_id)
 
+    def test_completed_job_is_never_reclaimed_or_reprocessed(self):
+        fake = _FakeSeedance([_SUCCEED])
+        self._use_provider(fake)
+        job = self._enqueue_video()
+
+        done = worker.process_one_job("w1")
+        self.assertEqual(done["status"], "completed")
+
+        # A completed job must not be picked up again by claim_next_job,
+        # and staleness reclaim must not touch it either — it isn't 'running'.
+        self.assertIsNone(jobs.claim_next_job("w2"))
+        reclaimed = jobs.reclaim_stale_jobs(stale_after_seconds=0)
+        self.assertNotIn(job["id"], reclaimed)
+        self.assertEqual(jobs.get_job(job["id"])["status"], "completed")
+        self.assertEqual(fake.submit_calls, 1)
+
     def test_retryable_poll_failure_does_not_resubmit_on_retry(self):
         fake = _FakeSeedance([TimeoutError("slow"), _SUCCEED])
         self._use_provider(fake)
