@@ -79,3 +79,18 @@ Kling מאמת עם זוג AccessKey/SecretKey שחותם JWT קצר־מועד (
 עמידות ה־worker (Gate 2): מזהה משימת ה־Kling נשמר על שורת ה־job (`provider_task_id`) מיד לאחר השליחה. ניסיון חוזר או הפעלה מחדש של ה־worker ממשיך לבצע polling על אותה המשימה במקום לשלוח משימה כפולה (ומחויבת בנפרד). משימה שנתקעה במצב `running` בעקבות קריסה משוחזרת אוטומטית ל־`retrying` דרך `reclaim_stale_jobs`.
 
 המפתחות נקראים מסביבת ההפעלה בלבד ואינם נשמרים במאגר. ראו `.env.example`. הערך: אין לבצע deploy אוטומטי — פריסת Render היא ידנית.
+
+## וידאו: Seedance 2.0 via fal.ai (ספק ראשי) — ייצוב ה-vertical slice
+
+הספק הראשי כיום הוא Seedance 2.0 דרך fal.ai (`FAL_API_KEY`); Kling נשאר כספק גיבוי (fallback) אם שני מפתחות ה-Kling מוגדרים ו-`FAL_API_KEY` ריק. ראו `get_video_provider()` ב-`app/services/video_provider.py`.
+
+**זרימת הפקה מלאה:** העלאת תמונה (`POST /api/shots/{id}/media/upload`, multipart — לא הדבקת URL) → אישור תמונה → `GET /api/video-generation/shots/{id}/readiness` (בדיקה שאינה גובה תשלום) → יצירת וידאו → ה-worker הרקע (`app/background_worker.py`, thread יחיד בתוך תהליך ה-web — מתאים ל-Render free tier ללא worker service נפרד) שולח ל-Seedance ומאחסן את תוצאת ה-video_result.
+
+**עמידות (mirrors Kling's Gate 2 guarantee):** `SeedanceProvider.submit()` רק שולח בקשה ל-fal.ai ומחזיר מזהה — הוא **אינו** חוסם. `provider_task_id` נשמר על ה-job מיד, לפני כל polling. `check_task()` היא בדיקת סטטוס בודדת ולא חוסמת. קריסה/הפעלה מחדש של ה-worker או כישלון בר-ניסיון-חוזר ממשיכים polling על אותה בקשת fal.ai ולעולם אינם שולחים בקשה כפולה (ומחויבת בנפרד). כישלונות מדווחים כקטגוריה יציבה ובטוחה (`SeedanceErrorCategory` — למשל `authentication_failed`, `source_image_unreachable`, `moderation_rejected`) ולא כטקסט חופשי מהספק; קטגוריות מסוימות (auth, moderation, קלט לא תקין) מסומנות non-retryable ולא צורכות ניסיונות חוזרים לשווא.
+
+**⚠️ חוסם שחרור (release blocker) — אחסון מדיה שהועלתה:** ל-Render free tier **אין** אפשרות דיסק מתמיד כלל (persistent disk דורש תוכנית בתשלום, Starter ומעלה). קובץ שנשמר תחת `GENERATED_MEDIA_PATH` (ברירת מחדל: תיקייה בתוך קוד האפליקציה עצמו) **נמחק בכל deploy/restart**, בעוד השורה ב-media_results ממשיכה להצביע עליו — כלומר וידאו/תמונה שהועלו יעלמו מבלי אזהרה. שתי אופציות אמיתיות בלבד:
+
+1. **מומלץ:** אחסון אובייקטים חיצוני (S3-compatible / Cloudflare R2 / Backblaze B2) — לא מומש כאן, דורש הרשאות/credentials חדשים שלא הוגדרו.
+2. **פתרון alpha זמני:** שדרוג Render לתוכנית עם persistent disk. `render.yaml` כבר כולל בלוק `disk` מוכן (mountPath `/var/data`, `GENERATED_MEDIA_PATH=/var/data/generated`) — הוא **לא פעיל** בפועל בתוכנית free tier; יש צורך בשדרוג תוכנית ב-Render ולוודא שהקובץ שרד אחרי deploy/restart לפני שסומכים עליו בפרודקשן.
+
+עד שהוחלט/בוצע אחת מהאופציות, אין להסתמך על שרידות תמונות/וידאו שהועלו בין deploys.
