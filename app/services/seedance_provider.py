@@ -8,7 +8,7 @@ Environment variables required:
 """
 
 import time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -110,6 +110,16 @@ def _queue_url(value: object, fallback: str) -> str:
     return candidate
 
 
+def _result_url(response_url: object, fallback: str) -> str:
+    """Convert fal's convenience /response URL to the documented REST result URL."""
+    candidate = _queue_url(response_url, fallback)
+    parsed = urlparse(candidate)
+    path = parsed.path.rstrip("/")
+    if path.endswith("/response"):
+        path = path[: -len("/response")]
+    return urlunparse(parsed._replace(path=path))
+
+
 def _poll_until_complete(status_url: str, result_url: str) -> str:
     for _ in range(_MAX_POLLS):
         time.sleep(_POLL_INTERVAL)
@@ -183,10 +193,10 @@ class SeedanceProvider:
             f"{settings.fal_api_base}/{model}/requests/{request_id}/status"
         )
         fallback_result_url = (
-            f"{settings.fal_api_base}/{model}/requests/{request_id}/response"
+            f"{settings.fal_api_base}/{model}/requests/{request_id}"
         )
         status_url = _queue_url(data.get("status_url"), fallback_status_url)
-        result_url = _queue_url(data.get("response_url"), fallback_result_url)
+        result_url = _result_url(data.get("response_url"), fallback_result_url)
 
         video_url = _poll_until_complete(status_url, result_url)
         cost = _estimate_cost(request.duration_seconds, model)
