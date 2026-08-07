@@ -1,8 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from app.api.worker import get_worker_status, trigger_next_job
+import httpx
+
+from app.api.worker import get_worker_status, test_fal_connection, trigger_next_job
 from app.core.config import settings
 from app.database.connection import init_db
 from app.repositories import jobs, projects, scenes, shots
@@ -14,6 +17,7 @@ class WorkerApiTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         self.original_db = settings.database_path
+        self.original_fal_api_key = settings.fal_api_key
         settings.database_path = Path(self.tempdir.name) / "test.db"
         init_db()
         project = projects.create_project(
@@ -61,6 +65,7 @@ class WorkerApiTests(unittest.TestCase):
     def tearDown(self):
         background_worker.stop()
         settings.database_path = self.original_db
+        settings.fal_api_key = self.original_fal_api_key
         self.tempdir.cleanup()
 
     def _enqueue_video(self, key="shot-1-video-v1"):
@@ -94,6 +99,46 @@ class WorkerApiTests(unittest.TestCase):
     def test_process_next_endpoint_empty_queue_returns_empty_dict(self):
         result = trigger_next_job()
         self.assertEqual(result, {})
+
+    def test_fal_connection_no_key_returns_disconnected_without_network_call(self):
+        settings.fal_api_key = ""
+        with patch("app.api.worker.httpx.Client") as mock_client:
+            result = test_fal_connection()
+        mock_client.assert_not_called()
+        self.assertEqual(result, {"key_prefix": "", "http_status": None, "connected": False})
+
+    def test_fal_connection_never_returns_full_key(self):
+        settings.fal_api_key = "sk-verysecretlongkeyvalue1234567890"
+        with patch("app.api.worker.httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.get.return_value = (
+                httpx.Response(200, request=httpx.Request("GET", "https://fal.ai/api/models"))
+            )
+            result = test_fal_connection()
+        self.assertEqual(result["key_prefix"], settings.fal_api_key[:8])
+        self.assertNotIn(settings.fal_api_key, str(result))
+        self.assertEqual(result["http_status"], 200)
+        self.assertTrue(result["connected"])
+
+    def test_fal_connection_401_reports_disconnected(self):
+        settings.fal_api_key = "bad-key"
+        with patch("app.api.worker.httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.get.return_value = (
+                httpx.Response(401, request=httpx.Request("GET", "https://fal.ai/api/models"))
+            )
+            result = test_fal_connection()
+        self.assertEqual(result["http_status"], 401)
+        self.assertFalse(result["connected"])
+
+    def test_fal_connection_network_error_returns_null_status(self):
+        settings.fal_api_key = "some-key"
+        with patch("app.api.worker.httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.get.side_effect = httpx.ConnectError(
+                "boom"
+            )
+            result = test_fal_connection()
+        self.assertIsNone(result["http_status"])
+        self.assertFalse(result["connected"])
+        self.assertEqual(result["key_prefix"], "some-key"[:8])
 
 
 if __name__ == "__main__":
