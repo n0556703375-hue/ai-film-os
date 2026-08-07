@@ -22,7 +22,12 @@ from app.database.postgres_schema import POSTGRES_SCHEMA_SQL
 
 TABLE_ORDER = (
     "projects",
+    "import_runs",
+    "screenplay_characters",
+    "screenplay_locations",
     "scenes",
+    "scene_content_blocks",
+    "scene_characters",
     "shots",
     "assets",
     "shot_assets",
@@ -35,11 +40,13 @@ TABLE_ORDER = (
     "media_jobs",
 )
 
-# Every migrated table except shot_assets (composite primary key, no serial
-# "id" column) uses a BIGSERIAL id. Explicit-id inserts during import never
-# advance a PostgreSQL sequence, so these are the tables whose sequence must
-# be realigned after a persistent import commits.
-TABLES_WITH_SERIAL_ID = tuple(table for table in TABLE_ORDER if table != "shot_assets")
+# Every migrated table except shot_assets and scene_characters (composite
+# primary key, no serial "id" column) uses a BIGSERIAL id. Explicit-id
+# inserts during import never advance a PostgreSQL sequence, so these are
+# the tables whose sequence must be realigned after a persistent import
+# commits.
+_NO_SERIAL_ID_TABLES = {"shot_assets", "scene_characters"}
+TABLES_WITH_SERIAL_ID = tuple(table for table in TABLE_ORDER if table not in _NO_SERIAL_ID_TABLES)
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 

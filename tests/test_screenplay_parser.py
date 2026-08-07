@@ -1,0 +1,324 @@
+"""Coverage for the deterministic screenplay structural parser.
+
+All screenplay text here is original synthetic material written for this
+test suite — no copyrighted screenplay content is used anywhere.
+"""
+
+import unittest
+
+from app.services.screenplay_parser import (
+    ScreenplayParseError,
+    parse_screenplay,
+    validate_scene_order,
+)
+
+
+class EmptyAndErrorTests(unittest.TestCase):
+    def test_empty_screenplay_raises(self):
+        with self.assertRaises(ScreenplayParseError):
+            parse_screenplay("")
+
+    def test_whitespace_only_screenplay_raises(self):
+        with self.assertRaises(ScreenplayParseError):
+            parse_screenplay("   \n\n   ")
+
+
+class SceneDetectionTests(unittest.TestCase):
+    def test_numbered_english_scenes_detected_in_order(self):
+        text = (
+            "1. INT. KITCHEN - DAY\n\nA kettle boils.\n\n"
+            "2. EXT. GARDEN - DAY\n\nLeaves fall.\n\n"
+            "3. INT. KITCHEN - NIGHT\n\nThe kettle is cold now.\n"
+        )
+        result = parse_screenplay(text)
+        self.assertEqual([s.scene_number for s in result.scenes], [1, 2, 3])
+        self.assertEqual(result.scenes[0].location, "KITCHEN")
+        self.assertEqual(result.scenes[0].time_of_day, "DAY")
+        self.assertEqual(result.scenes[2].time_of_day, "NIGHT")
+
+    def test_unnumbered_english_scenes_detected(self):
+        text = "INT. OFFICE - DAY\n\nPapers everywhere.\n\nEXT. PARKING LOT - NIGHT\n\nA lone car.\n"
+        result = parse_screenplay(text)
+        self.assertEqual(len(result.scenes), 2)
+        self.assertEqual(result.scenes[0].location, "OFFICE")
+        self.assertEqual(result.scenes[1].location, "PARKING LOT")
+
+    def test_int_ext_combined_heading(self):
+        for token in ("INT./EXT.", "INT/EXT", "EXT./INT.", "I/E."):
+            with self.subTest(token=token):
+                text = f"{token} CAR - DAY\n\nDriving through the city.\n"
+                result = parse_screenplay(text)
+                self.assertEqual(result.scenes[0].int_ext, "INT/EXT")
+
+    def test_hebrew_scene_headings_detected(self):
+        text = (
+            "1. פנים. משרד - יום\n\nהשולחן מלא ניירת.\n\n"
+            "2. חוץ. חניה - לילה\n\nמכונית בודדת.\n"
+        )
+        result = parse_screenplay(text)
+        self.assertEqual(len(result.scenes), 2)
+        self.assertEqual(result.scenes[0].int_ext, "פנים")
+        self.assertEqual(result.scenes[0].location, "משרד")
+        self.assertEqual(result.scenes[1].int_ext, "חוץ")
+
+    def test_hebrew_combined_int_ext_heading(self):
+        text = "פנים/חוץ. מרפסת - ערב\n\nהיא מביטה בעיר.\n"
+        result = parse_screenplay(text)
+        self.assertEqual(result.scenes[0].int_ext, "פנים/חוץ")
+
+    def test_mixed_hebrew_and_english_screenplay(self):
+        text = (
+            "1. INT. APARTMENT - DAY\n\nA suitcase lies open.\n\n"
+            "2. פנים. דירה - יום\n\nמזוודה פתוחה על הרצפה.\n"
+        )
+        result = parse_screenplay(text)
+        self.assertEqual(len(result.scenes), 2)
+        self.assertEqual(result.scenes[0].location, "APARTMENT")
+        self.assertEqual(result.scenes[1].location, "דירה")
+
+    def test_extra_whitespace_and_page_breaks_do_not_break_detection(self):
+        text = (
+            "1.    INT.   HOUSE   -   DAY\n\n\n"
+            "   John enters the room slowly.   \n\n"
+            "-- 2 --\n\n"
+            "2. EXT. YARD - NIGHT\n\nA dog barks.\n"
+        )
+        result = parse_screenplay(text)
+        self.assertEqual(len(result.scenes), 2)
+        self.assertEqual(result.scenes[0].location, "HOUSE")
+        self.assertIn("John enters the room slowly.", result.scenes[0].raw_scene_text)
+
+    def test_no_scene_headings_falls_back_to_single_scene_with_warning(self):
+        text = "Just some free-form text with no screenplay structure at all.\nMore text here.\n"
+        result = parse_screenplay(text)
+        self.assertEqual(len(result.scenes), 1)
+        self.assertEqual(result.scenes[0].scene_number, 1)
+        self.assertIn("Just some free-form text", result.scenes[0].raw_scene_text)
+        categories = [w.category for w in result.warnings]
+        self.assertIn("no_scene_headings_detected", categories)
+
+    def test_scene_order_invariant_holds_for_many_scenes(self):
+        parts = [f"{i}. INT. ROOM {i} - DAY\n\nSomething happens in room {i}.\n" for i in range(1, 21)]
+        result = parse_screenplay("\n".join(parts))
+        self.assertEqual([s.scene_number for s in result.scenes], list(range(1, 21)))
+        validate_scene_order(result.scenes)  # must not raise
+
+    def test_no_scene_is_dropped_duplicated_or_reordered(self):
+        text = (
+            "1. INT. A - DAY\n\nFirst.\n\n"
+            "2. INT. B - DAY\n\nSecond.\n\n"
+            "3. INT. C - DAY\n\nThird.\n\n"
+            "4. INT. D - DAY\n\nFourth.\n"
+        )
+        result = parse_screenplay(text)
+        headings = [s.location for s in result.scenes]
+        self.assertEqual(headings, ["A", "B", "C", "D"])
+        self.assertEqual(len(set(s.scene_number for s in result.scenes)), 4)
+
+    def test_original_heading_text_is_preserved_verbatim_content(self):
+        text = "7. INT.   WAREHOUSE - CONTINUOUS\n\nBoxes stacked to the ceiling.\n"
+        result = parse_screenplay(text)
+        self.assertIn("WAREHOUSE", result.scenes[0].original_heading)
+        self.assertEqual(result.scenes[0].time_of_day, "CONTINUOUS")
+
+
+class DialogueVsActionTests(unittest.TestCase):
+    def test_action_paragraph_is_never_classified_as_dialogue(self):
+        text = (
+            "1. INT. ROOM - DAY\n\n"
+            "The room is quiet. Dust floats in the light. Nothing moves for a long moment.\n"
+        )
+        result = parse_screenplay(text)
+        blocks = result.scenes[0].blocks
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].block_type, "action")
+        self.assertEqual(blocks[0].character_name, "")
+
+    def test_dialogue_heavy_scene_alternates_correctly(self):
+        text = (
+            "1. INT. CAFE - DAY\n\n"
+            "ANNA\n"
+            "Did you get my message?\n\n"
+            "DAVID\n"
+            "Yeah, I saw it.\n\n"
+            "ANNA\n"
+            "And?\n\n"
+            "DAVID\n"
+            "I'm still thinking.\n"
+        )
+        result = parse_screenplay(text)
+        blocks = result.scenes[0].blocks
+        self.assertEqual([b.block_type for b in blocks], ["dialogue"] * 4)
+        self.assertEqual([b.character_name for b in blocks], ["ANNA", "DAVID", "ANNA", "DAVID"])
+        self.assertEqual(blocks[0].raw_text, "Did you get my message?")
+
+    def test_action_heavy_scene_has_no_dialogue_blocks(self):
+        text = (
+            "1. EXT. FIELD - DAY\n\n"
+            "Wind moves through tall grass.\n\n"
+            "A hawk circles overhead.\n\n"
+            "Clouds gather on the horizon.\n"
+        )
+        result = parse_screenplay(text)
+        blocks = result.scenes[0].blocks
+        self.assertTrue(all(b.block_type == "action" for b in blocks))
+        self.assertEqual(len(blocks), 3)
+
+    def test_dialogue_is_never_assigned_to_the_wrong_character(self):
+        text = (
+            "1. INT. ROOM - DAY\n\n"
+            "PETER\n"
+            "This is mine.\n\n"
+            "SUSAN\n"
+            "No, it's mine.\n"
+        )
+        result = parse_screenplay(text)
+        blocks = result.scenes[0].blocks
+        self.assertEqual(blocks[0].character_name, "PETER")
+        self.assertEqual(blocks[0].raw_text, "This is mine.")
+        self.assertEqual(blocks[1].character_name, "SUSAN")
+        self.assertEqual(blocks[1].raw_text, "No, it's mine.")
+
+    def test_parenthetical_before_dialogue_is_captured_separately(self):
+        text = "1. INT. ROOM - DAY\n\nJANE\n(whispering)\nDon't move.\n"
+        result = parse_screenplay(text)
+        block = result.scenes[0].blocks[0]
+        self.assertEqual(block.block_type, "dialogue")
+        self.assertEqual(block.parenthetical, "(whispering)")
+        self.assertEqual(block.raw_text, "Don't move.")
+
+    def test_transition_is_classified_as_transition_not_action(self):
+        text = "1. INT. ROOM - DAY\n\nShe leaves.\n\nFADE OUT.\n\n2. EXT. STREET - DAY\n\nRain falls.\n"
+        result = parse_screenplay(text)
+        blocks = result.scenes[0].blocks
+        self.assertEqual(blocks[-1].block_type, "transition")
+        self.assertEqual(blocks[-1].raw_text, "FADE OUT.")
+
+    def test_cue_with_vo_annotation_still_classified_as_dialogue(self):
+        text = "1. INT. ROOM - DAY\n\nTOM (V.O.)\nI never told anyone.\n"
+        result = parse_screenplay(text)
+        block = result.scenes[0].blocks[0]
+        self.assertEqual(block.block_type, "dialogue")
+        self.assertEqual(block.character_name, "TOM")
+
+    def test_low_confidence_hebrew_cue_without_colon_is_flagged(self):
+        # Hebrew has no case distinction, so a short line with no colon is a
+        # guess, not a confirmed cue — must be flagged, not silently trusted.
+        text = "1. פנים. חדר - יום\n\nדני\nבוא הנה כבר.\n"
+        result = parse_screenplay(text)
+        block = result.scenes[0].blocks[0]
+        self.assertEqual(block.confidence, "low")
+        categories = [w.category for w in result.warnings]
+        self.assertIn("low_confidence_classification", categories)
+
+    def test_block_order_is_preserved_within_a_scene(self):
+        text = (
+            "1. INT. ROOM - DAY\n\n"
+            "He walks in.\n\n"
+            "MIA\n"
+            "Finally.\n\n"
+            "He sits.\n\n"
+            "CUT TO:\n"
+        )
+        result = parse_screenplay(text)
+        types = [b.block_type for b in result.scenes[0].blocks]
+        self.assertEqual(types, ["action", "dialogue", "action", "transition"])
+        orders = [b.order for b in result.scenes[0].blocks]
+        self.assertEqual(orders, sorted(orders))
+
+
+class CharacterNormalizationTests(unittest.TestCase):
+    def test_exact_case_and_whitespace_variants_merge_to_one_character(self):
+        text = (
+            "1. INT. ROOM - DAY\n\nJOHN\nHello.\n\n"
+            "2. INT. ROOM - NIGHT\n\nJohn\nHi again.\n\n"
+            "3. INT. ROOM - DAY\n\nJOHN  \nOne more time.\n"
+        )
+        result = parse_screenplay(text)
+        self.assertEqual(len(result.characters), 1)
+        self.assertEqual(result.characters[0].first_appearance_scene_number, 1)
+
+    def test_annotation_variants_of_same_character_do_not_create_aliases_incorrectly(self):
+        text = "1. INT. ROOM - DAY\n\nKATE\nHi.\n\n2. INT. ROOM - DAY\n\nKATE (O.S.)\nWait!\n"
+        result = parse_screenplay(text)
+        names = [c.canonical_name for c in result.characters]
+        self.assertEqual(names, ["KATE"])
+
+    def test_genuinely_different_names_are_never_merged(self):
+        # "JOHN" vs "JOHN SMITH" must stay separate — never auto-merge on
+        # partial overlap, only on an exact normalized match.
+        text = "1. INT. ROOM - DAY\n\nJOHN\nHi.\n\n2. INT. ROOM - DAY\n\nJOHN SMITH\nHello there.\n"
+        result = parse_screenplay(text)
+        names = sorted(c.canonical_name for c in result.characters)
+        self.assertEqual(names, ["JOHN", "JOHN SMITH"])
+
+    def test_hebrew_character_alias_spacing_variant_merges(self):
+        text = (
+            "1. פנים. חדר - יום\n\nרונית:\nשלום.\n\n"
+            "2. פנים. חדר - יום\n\nרונית  :\nמה שלומך.\n"
+        )
+        result = parse_screenplay(text)
+        self.assertEqual(len(result.characters), 1)
+        self.assertEqual(result.characters[0].canonical_name.strip(), "רונית")
+
+
+class LocationNormalizationTests(unittest.TestCase):
+    def test_exact_formatting_variants_of_same_location_merge(self):
+        text = (
+            "1. INT. KITCHEN - DAY\n\nCooking.\n\n"
+            "2. int.   kitchen - night\n\nStill cooking.\n"
+        )
+        result = parse_screenplay(text)
+        self.assertEqual(len(result.locations), 1)
+
+    def test_different_phrasings_of_a_location_are_not_semantically_merged(self):
+        # Documented v1 limitation: only exact-normalized matches merge.
+        # "LEORA'S HOUSE" and "LEORA - LIVING ROOM" are conceptually related
+        # but textually different, so they stay as two distinct locations
+        # rather than risking an incorrect merge.
+        text = (
+            "1. INT. LEORA'S HOUSE - DAY\n\nShe walks in.\n\n"
+            "2. INT. LEORA'S HOUSE - LIVING ROOM - DAY\n\nShe sits.\n"
+        )
+        result = parse_screenplay(text)
+        self.assertEqual(len(result.locations), 2)
+
+    def test_location_first_appearance_scene_number_is_correct(self):
+        text = "1. INT. A - DAY\n\nx\n\n2. INT. B - DAY\n\ny\n\n3. INT. A - NIGHT\n\nz\n"
+        result = parse_screenplay(text)
+        location_a = next(loc for loc in result.locations if loc.canonical_name == "A")
+        self.assertEqual(location_a.first_appearance_scene_number, 1)
+
+
+class MalformedButRecoverableTests(unittest.TestCase):
+    def test_missing_time_of_day_does_not_break_heading_parse(self):
+        text = "1. INT. LIBRARY\n\nBooks everywhere.\n"
+        result = parse_screenplay(text)
+        self.assertEqual(result.scenes[0].location, "LIBRARY")
+        self.assertEqual(result.scenes[0].time_of_day, "")
+
+    def test_lowercase_int_ext_still_detected(self):
+        text = "int. shed - day\n\nTools on the wall.\n"
+        result = parse_screenplay(text)
+        self.assertEqual(len(result.scenes), 1)
+        self.assertEqual(result.scenes[0].int_ext, "INT")
+
+    def test_heading_with_trailing_colon_separator(self):
+        text = "INT: GARAGE - NIGHT\n\nA motorcycle under a tarp.\n"
+        result = parse_screenplay(text)
+        self.assertEqual(result.scenes[0].location, "GARAGE")
+
+
+class ReimportSameScreenplayTests(unittest.TestCase):
+    def test_parsing_the_same_screenplay_twice_is_deterministic(self):
+        text = (
+            "1. INT. HOUSE - DAY\n\nJOHN\nHi.\n\n"
+            "2. EXT. YARD - NIGHT\n\nMARY\nHello.\n"
+        )
+        first = parse_screenplay(text)
+        second = parse_screenplay(text)
+        self.assertEqual(first.to_dict(), second.to_dict())
+
+
+if __name__ == "__main__":
+    unittest.main()

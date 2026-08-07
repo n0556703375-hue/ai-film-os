@@ -29,6 +29,14 @@ CREATE TABLE IF NOT EXISTS scenes (
     notes TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'מתוכנן',
     updated_at TEXT NOT NULL DEFAULT '',
+    original_heading TEXT NOT NULL DEFAULT '',
+    normalized_heading TEXT NOT NULL DEFAULT '',
+    int_ext TEXT NOT NULL DEFAULT '',
+    location TEXT NOT NULL DEFAULT '',
+    time_of_day TEXT NOT NULL DEFAULT '',
+    raw_scene_text TEXT NOT NULL DEFAULT '',
+    synopsis TEXT NOT NULL DEFAULT '',
+    import_run_id BIGINT,
     FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
@@ -187,6 +195,72 @@ CREATE TABLE IF NOT EXISTS media_jobs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
     FOREIGN KEY(shot_id) REFERENCES shots(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS import_runs (
+    id BIGSERIAL PRIMARY KEY,
+    project_id BIGINT NOT NULL,
+    source_type TEXT NOT NULL DEFAULT 'paste',
+    source_filename TEXT NOT NULL DEFAULT '',
+    source_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'review_required',
+    parser_version TEXT NOT NULL DEFAULT '1',
+    screenplay_text TEXT NOT NULL DEFAULT '',
+    breakdown_json TEXT NOT NULL DEFAULT '{}',
+    warnings_json TEXT NOT NULL DEFAULT '[]',
+    scene_count INTEGER NOT NULL DEFAULT 0,
+    character_count INTEGER NOT NULL DEFAULT 0,
+    location_count INTEGER NOT NULL DEFAULT 0,
+    prop_count INTEGER NOT NULL DEFAULT 0,
+    error_category TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    approved_at TIMESTAMPTZ,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS scene_content_blocks (
+    id BIGSERIAL PRIMARY KEY,
+    scene_id BIGINT NOT NULL,
+    block_order INTEGER NOT NULL,
+    block_type TEXT NOT NULL,
+    character_name TEXT NOT NULL DEFAULT '',
+    parenthetical TEXT NOT NULL DEFAULT '',
+    raw_text TEXT NOT NULL DEFAULT '',
+    confidence TEXT NOT NULL DEFAULT 'high',
+    FOREIGN KEY(scene_id) REFERENCES scenes(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS screenplay_characters (
+    id BIGSERIAL PRIMARY KEY,
+    project_id BIGINT NOT NULL,
+    canonical_name TEXT NOT NULL,
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    first_appearance_scene_number INTEGER,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project_id, canonical_name),
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS screenplay_locations (
+    id BIGSERIAL PRIMARY KEY,
+    project_id BIGINT NOT NULL,
+    canonical_name TEXT NOT NULL,
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    first_appearance_scene_number INTEGER,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project_id, canonical_name),
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS scene_characters (
+    scene_id BIGINT NOT NULL,
+    screenplay_character_id BIGINT NOT NULL,
+    PRIMARY KEY(scene_id, screenplay_character_id),
+    FOREIGN KEY(scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
+    FOREIGN KEY(screenplay_character_id) REFERENCES screenplay_characters(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS scene_asset_variants (
