@@ -107,7 +107,13 @@ class MediaWorkerTests(unittest.TestCase):
             "model": "Nano Banana Pro",
             "status": "מאושר",
         })
-        provider = Mock()
+        # spec=["generate"] matters: a bare Mock() auto-creates any attribute
+        # accessed on it (including submit/check_task), which would silently
+        # route this "simple generate()-only provider" test through the
+        # resumable submit/check_task path instead of the fallback branch it
+        # means to exercise.
+        provider = Mock(spec=["generate", "name"])
+        provider.name = "test-video"
         provider.generate.return_value = VideoGenerationResult(
             url="https://example.com/result.mp4",
             provider="Test Video",

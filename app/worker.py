@@ -24,7 +24,18 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_SECONDS = float(os.getenv("MEDIA_WORKER_POLL_INTERVAL", "3"))
 TASK_TIMEOUT_SECONDS = float(os.getenv("MEDIA_WORKER_TASK_TIMEOUT", "600"))
 KLING_POLL_INTERVAL = float(os.getenv("KLING_WORKER_POLL_INTERVAL", "15"))
+SEEDANCE_POLL_INTERVAL = float(os.getenv("SEEDANCE_WORKER_POLL_INTERVAL", "8"))
 IDLE_SLEEP_SECONDS = float(os.getenv("MEDIA_WORKER_IDLE_SLEEP", "2"))
+
+# Providers whose submit()/check_task() pair is safe to resume: the task id
+# is persisted to media_jobs.provider_task_id before any polling starts, so a
+# crash or retryable failure mid-poll resumes the same provider task instead
+# of submitting a new (separately billed) one. Each entry maps the provider's
+# `.name` to its poll cadence.
+_RESUMABLE_PROVIDER_POLL_INTERVALS = {
+    "kling": KLING_POLL_INTERVAL,
+    "seedance": SEEDANCE_POLL_INTERVAL,
+}
 
 
 def _worker_id() -> str:
@@ -50,7 +61,36 @@ def _wait_for_magnific(
     raise TimeoutError("Magnific task polling timed out.")
 
 
-def _wait_for_kling(
+class ProviderTaskFailed(RuntimeError):
+    """A resumable provider (Kling, Seedance) reported a failed task.
+
+    ``reason`` is whatever ``check_task()`` returned for this provider — for
+    Seedance that is always a stable ``SeedanceErrorCategory`` value, never
+    provider-authored text, so this is safe to persist into
+    ``media_jobs.last_error`` and show in the UI.
+    """
+
+    def __init__(self, provider_name: str, reason: str, *, retryable: bool = True):
+        self.retryable = retryable
+        super().__init__(f"{provider_name} video generation failed: {reason}" if reason else f"{provider_name} video generation failed")
+
+
+# Reasons a resumable provider can report that will never succeed on a plain
+# retry of the same request — matches Seedance's non-retryable categories so
+# the worker doesn't burn attempts resubmitting a request that fails the same
+# way every time. Kling's sanitized reasons don't use this vocabulary today,
+# so they fall through to the retryable default, unchanged from prior behavior.
+_NON_RETRYABLE_TASK_REASONS = frozenset({
+    "authentication_failed",
+    "invalid_input",
+    "source_image_unreachable",
+    "insufficient_credits",
+    "moderation_rejected",
+    "invalid_provider_response",
+})
+
+
+def _wait_for_provider_task(
     provider,
     task_id: str,
     *,
@@ -58,28 +98,35 @@ def _wait_for_kling(
     poll_interval: float | None = None,
     sleep: Callable[[float], None] | None = None,
 ) -> str:
-    """Poll provider.check_task() until the Kling task succeeds or fails.
+    """Poll provider.check_task() until the task succeeds or fails.
 
-    The submission itself has already been persisted (provider_task_id) before
-    this runs, so a timeout here is retryable and resumes the *same* task
-    rather than submitting a new one.
+    Works for any provider implementing the non-blocking submit()/
+    check_task() contract (Kling, Seedance). The submission itself has
+    already been persisted (provider_task_id) before this runs, so a timeout
+    here is retryable and resumes the *same* task rather than submitting a
+    new one.
 
     Args:
-        provider: KlingProvider instance (has check_task method).
-        task_id: Kling task_id returned by provider.submit().
+        provider: a provider instance with a check_task(task_id) method.
+        task_id: opaque task id returned by provider.submit().
         timeout_seconds: total seconds before TimeoutError.
         poll_interval: seconds between polls.
         sleep: injectable for testing.
 
     Returns:
-        Video URL from the Kling CDN.
+        The completed video URL.
     """
     # Resolved at call time (not as bound defaults) so the poll cadence and
     # the injectable clock can be overridden — including by tests — after the
     # module's constants are set.
     timeout_seconds = TASK_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
-    poll_interval = KLING_POLL_INTERVAL if poll_interval is None else poll_interval
+    poll_interval = (
+        _RESUMABLE_PROVIDER_POLL_INTERVALS.get(getattr(provider, "name", ""), KLING_POLL_INTERVAL)
+        if poll_interval is None
+        else poll_interval
+    )
     sleep = time.sleep if sleep is None else sleep
+    provider_name = getattr(provider, "name", "Provider")
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         sleep(poll_interval)
@@ -87,10 +134,10 @@ def _wait_for_kling(
         if status["status"] == "succeed":
             return status["url"]
         if status["status"] == "failed":
-            raise RuntimeError(f"Kling כשל ביצירת הווידאו: {status['reason']}")
-    raise TimeoutError(
-        f"Kling לא השלים את יצירת הווידאו אחרי {timeout_seconds:.0f} שניות."
-    )
+            reason = status.get("reason", "")
+            retryable = reason not in _NON_RETRYABLE_TASK_REASONS
+            raise ProviderTaskFailed(provider_name, reason, retryable=retryable)
+    raise TimeoutError(f"{provider_name} did not complete within {timeout_seconds:.0f}s.")
 
 
 class SyncAudioRejection:
@@ -262,15 +309,17 @@ def _approved_image_url(shot_id: int) -> str:
     return approved[0]["url"]
 
 
-def _submit_or_resume_kling(provider, request: VideoGenerationRequest, job: dict) -> str:
-    """Return the Kling task_id for this job, submitting at most once.
+def _submit_or_resume_task(provider, request: VideoGenerationRequest, job: dict) -> str:
+    """Return the provider task id for this job, submitting at most once.
 
-    If the job already carries a persisted ``provider_task_id`` (a prior
-    attempt submitted before the worker was interrupted), that task is
-    resumed and no new submission is made — this is what keeps a retry or a
-    worker restart from creating a second, separately billed Kling job. A
-    fresh submission is persisted immediately, before any polling, so the
-    task id survives a crash in the very next instant.
+    Works for any provider that implements the non-blocking submit()/
+    check_task() contract (Kling, Seedance). If the job already carries a
+    persisted ``provider_task_id`` (a prior attempt submitted before the
+    worker was interrupted), that task is resumed and no new submission is
+    made — this is what keeps a retry or a worker restart from creating a
+    second, separately billed provider job. A fresh submission is persisted
+    immediately, before any polling, so the task id survives a crash in the
+    very next instant.
     """
     existing_task_id = str(job.get("provider_task_id") or "").strip()
     if existing_task_id:
@@ -278,6 +327,21 @@ def _submit_or_resume_kling(provider, request: VideoGenerationRequest, job: dict
     task_id = provider.submit(request)
     jobs.record_provider_task_id(job["id"], task_id)
     return task_id
+
+
+def _resolve_model_and_cost(provider, request: VideoGenerationRequest) -> tuple[str, float]:
+    """Resolve the model id and estimated cost for a resumable provider.
+
+    Providers that expose ``model_for``/``cost_for`` (Seedance) are asked
+    directly. Kling predates that convention and resolves its model/cost via
+    module-level helpers instead of instance methods.
+    """
+    if hasattr(provider, "model_for") and hasattr(provider, "cost_for"):
+        return provider.model_for(request), provider.cost_for(request)
+    from app.services.kling_provider import _model_for, _estimate_cost
+
+    model = _model_for(request.model_profile)
+    return model, _estimate_cost(request.duration_seconds, model)
 
 
 def _process_video_job(job: dict) -> dict:
@@ -298,16 +362,16 @@ def _process_video_job(job: dict) -> dict:
 
     provider = get_video_provider()
 
-    from app.services.kling_provider import KlingProvider
-    if isinstance(provider, KlingProvider):
-        task_id = _submit_or_resume_kling(provider, request, job)
-        video_url = _wait_for_kling(provider, task_id)
-        from app.services.kling_provider import _model_for, _estimate_cost
-        model = _model_for(request.model_profile)
-        cost = _estimate_cost(request.duration_seconds, model)
+    if hasattr(provider, "submit") and hasattr(provider, "check_task"):
+        # Any provider implementing the non-blocking submit()/check_task()
+        # contract goes through the resumable path: the task id is
+        # persisted before polling so a crash/retry never resubmits.
+        task_id = _submit_or_resume_task(provider, request, job)
+        video_url = _wait_for_provider_task(provider, task_id)
+        model, cost = _resolve_model_and_cost(provider, request)
         result = VideoGenerationResult(
             url=video_url,
-            provider="kling",
+            provider=getattr(provider, "name", ""),
             model=model,
             external_task_id=task_id,
             actual_cost_usd=cost,
@@ -366,7 +430,11 @@ def process_one_job(worker_id: str | None = None) -> dict | None:
     except (TimeoutError, ConnectionError) as exc:
         return jobs.fail_job(job["id"], str(exc), retryable=True)
     except Exception as exc:
-        return jobs.fail_job(job["id"], str(exc), retryable=True)
+        # ProviderTaskFailed / SeedanceProviderError carry a stable .retryable
+        # verdict (e.g. authentication_failed and moderation_rejected must not
+        # retry); anything else defaults to retryable, unchanged from before.
+        retryable = bool(getattr(exc, "retryable", True))
+        return jobs.fail_job(job["id"], str(exc), retryable=retryable)
 
 
 def run_forever() -> None:
