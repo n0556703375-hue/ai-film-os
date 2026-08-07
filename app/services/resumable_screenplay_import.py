@@ -4,7 +4,11 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.services.screenplay_breakdown import _breakdown_chunk, _split_screenplay
+from app.services.screenplay_breakdown import (
+    _breakdown_chunk,
+    _normalize_scenes,
+    _split_screenplay,
+)
 
 
 @dataclass
@@ -47,12 +51,15 @@ def process_next_chunk(project: dict, state: ImportRunState) -> ImportRunState:
         return state
 
     chunk_index = state.next_chunk_index
-    generated = _breakdown_chunk(
-        project,
-        chunks[chunk_index],
-        state.target_shots_per_minute,
-        chunk_index + 1,
-        len(chunks),
+    generated = _normalize_scenes(
+        _breakdown_chunk(
+            project,
+            chunks[chunk_index],
+            state.target_shots_per_minute,
+            chunk_index + 1,
+            len(chunks),
+        ),
+        start_number=len(state.scenes) + 1,
     )
     state.scenes.extend(generated)
     state.next_chunk_index += 1
