@@ -1,11 +1,8 @@
-import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pathlib import Path
-
-logger = logging.getLogger(__name__)
 
 from app.database.connection import init_db
 from app.api.health import router as health_router
@@ -35,11 +32,6 @@ settings.generated_media_path.mkdir(parents=True, exist_ok=True)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    key = settings.fal_api_key.strip()
-    if key:
-        logger.info(f"FAL_API_KEY loaded (prefix={key[:8]}...)")
-    else:
-        logger.warning("FAL_API_KEY not set — Seedance video provider disabled")
     from app import background_worker
     background_worker.start()
     yield
