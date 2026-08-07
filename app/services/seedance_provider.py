@@ -9,7 +9,9 @@ The provider delegates submit/poll/result handling to fal.ai's official Python
 client and sends only fields accepted by the current Seedance 2.0 schema.
 """
 
+import ipaddress
 import os
+from urllib.parse import urlparse
 
 import fal_client
 
@@ -86,6 +88,56 @@ def _estimate_cost(duration_seconds: float, model: str) -> float:
     return round(rate * duration, 4)
 
 
+def _public_image_url(image_url: str) -> str:
+    """Return an HTTPS URL that fal.ai can fetch from the public internet.
+
+    AI Film OS may persist internally served media as `/generated/...`. That is
+    valid in the browser but not fetchable by fal.ai unless it is expanded to
+    the service's public Render URL. Absolute URLs must already be public
+    HTTPS endpoints; local/private hosts are rejected before a paid request is
+    submitted.
+    """
+    value = str(image_url or "").strip()
+    if not value:
+        raise ValueError("Approved shot image URL is empty.")
+
+    if value.startswith("/"):
+        public_base = (
+            os.getenv("PUBLIC_BASE_URL", "").strip()
+            or os.getenv("RENDER_EXTERNAL_URL", "").strip()
+        )
+        if not public_base:
+            raise ValueError(
+                "Approved shot image is stored as a local path, but no public service URL is configured."
+            )
+        base = urlparse(public_base)
+        if base.scheme != "https" or not base.hostname:
+            raise ValueError("Public service URL must be HTTPS.")
+        return f"{public_base.rstrip('/')}/{value.lstrip('/')}"
+
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("Approved shot image must use a public HTTPS URL.")
+
+    host = parsed.hostname.lower().rstrip(".")
+    if host == "localhost" or host.endswith(".local"):
+        raise ValueError("Approved shot image URL is not publicly reachable.")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address and (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_unspecified
+    ):
+        raise ValueError("Approved shot image URL is not publicly reachable.")
+
+    return value
+
+
 def _extract_video_url(body: dict) -> str:
     video = body.get("video")
     if isinstance(video, dict):
@@ -131,7 +183,7 @@ class SeedanceProvider:
         # width/height. AI Film OS keeps audio generation separate, so native
         # Seedance audio is explicitly disabled here.
         payload = {
-            "image_url": request.image_url,
+            "image_url": _public_image_url(request.image_url),
             "prompt": _build_prompt(request),
             "duration": _duration_for(request.duration_seconds),
             "resolution": "720p",
