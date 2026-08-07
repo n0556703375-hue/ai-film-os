@@ -1,18 +1,17 @@
-"""Gate 2 resumability contract for the Kling video worker.
+"""Gate: Seedance video worker resumability.
 
-These tests prove the two properties the Milestone B Gate 2 checklist calls
-out that a naive submit-then-block worker cannot satisfy:
+Before this fix, SeedanceProvider only exposed a blocking generate() that
+submitted to fal.ai and waited for completion in one call. A crash or
+retryable failure mid-poll had no persisted request id to resume, so a retry
+or worker restart called generate() again — a second, separately billed
+fal.ai submission for the same shot. These tests prove that gap is closed by
+routing Seedance through the same submit()/check_task() resumable contract
+already proven for Kling.
 
-  * No duplicate submission on retry — a retryable failure mid-poll must not
-    submit a second (separately billed) Kling task.
-  * Worker resumes correctly after restart — a job orphaned in 'running' by a
-    crash/redeploy is reclaimed and finished against the *same* provider task.
-
-The Kling network boundary is faked; no live or paid provider call is made.
+The fal.ai network boundary is faked; no live or paid provider call is made.
 """
 
 import tempfile
-import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,19 +20,20 @@ from app.core.config import settings
 from app.database.connection import get_connection, init_db
 from app.repositories import jobs, projects, scenes, shots
 from app.repositories.approvals import APPROVED
-from app.services.kling_provider import KlingProvider
+from app.services.seedance_provider import SeedanceProvider
 from app.services.video_provider import VideoGenerationRequest
 import app.worker as worker
 
 
-class _FakeKling(KlingProvider):
-    """A KlingProvider whose network calls are scripted and counted.
+class _FakeSeedance(SeedanceProvider):
+    """A SeedanceProvider whose network calls are scripted and counted.
 
-    Subclassing the real provider keeps the worker's ``isinstance`` branch
-    honest while ``submit``/``check_task`` stay offline.
+    Subclassing the real provider keeps the worker's duck-typed dispatch
+    (submit()/check_task()/model_for()/cost_for()) honest while the actual
+    fal.ai calls stay offline.
     """
 
-    def __init__(self, statuses, task_id="kling-task-abc123"):
+    def __init__(self, statuses, task_id="bytedance/seedance-2.0/image-to-video::fake-req-1"):
         self.task_id = task_id
         self.submit_calls = 0
         self.check_calls = 0
@@ -51,18 +51,25 @@ class _FakeKling(KlingProvider):
             raise outcome
         return outcome
 
+    def model_for(self, request):
+        return "bytedance/seedance-2.0/image-to-video"
 
-_SUCCEED = {"status": "succeed", "url": "https://cdn.kling.example/final.mp4", "reason": ""}
+    def cost_for(self, request):
+        return 1.517
 
 
-class KlingWorkerResumabilityTests(unittest.TestCase):
+_SUCCEED = {"status": "succeed", "url": "https://cdn.fal.example/final.mp4", "reason": ""}
+_AUTH_FAILED = {"status": "failed", "url": "", "reason": "authentication_failed"}
+
+
+class SeedanceWorkerResumabilityTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         self.original_db = settings.database_path
         settings.database_path = Path(self.tempdir.name) / "test.db"
         init_db()
         project = projects.create_project(
-            {"name": "Gate2", "description": "", "visual_style": "", "rules": ""}
+            {"name": "SeedanceGate", "description": "", "visual_style": "", "rules": ""}
         )
         scene = scenes.create_scene(
             {
@@ -89,7 +96,6 @@ class KlingWorkerResumabilityTests(unittest.TestCase):
                 "duration_seconds": 5,
             }
         )
-        # Video generation requires an approved source image.
         shots.create_media_result(
             self.shot["id"],
             {
@@ -98,7 +104,6 @@ class KlingWorkerResumabilityTests(unittest.TestCase):
                 "status": APPROVED,
             },
         )
-        # Keep polling instantaneous — the provider is faked.
         self._real_sleep = worker.time.sleep
         worker.time.sleep = lambda *_a, **_k: None
         self._real_get_provider = worker.get_video_provider
@@ -118,30 +123,10 @@ class KlingWorkerResumabilityTests(unittest.TestCase):
     def _use_provider(self, fake):
         worker.get_video_provider = lambda: fake
 
-    # --- persistence primitive -------------------------------------------
-
-    def test_record_provider_task_id_persists_without_changing_status(self):
-        job = self._enqueue_video()
-        claimed = jobs.claim_next_job("w1")
-        updated = jobs.record_provider_task_id(claimed["id"], "kling-xyz")
-        self.assertEqual(updated["provider_task_id"], "kling-xyz")
-        self.assertEqual(updated["status"], "running")
-        # Survives a fresh read.
-        self.assertEqual(jobs.get_job(job["id"])["provider_task_id"], "kling-xyz")
-
-    def test_record_provider_task_id_rejects_empty(self):
-        job = self._enqueue_video()
-        with self.assertRaises(ValueError):
-            jobs.record_provider_task_id(job["id"], "  ")
-
-    # --- submit-at-most-once ---------------------------------------------
-
     def test_submit_or_resume_submits_once_then_resumes(self):
-        fake = _FakeKling([])
+        fake = _FakeSeedance([])
         request = VideoGenerationRequest(
-            image_url="https://cdn.example/approved.png",
-            prompt="p",
-            duration_seconds=5,
+            image_url="https://cdn.example/approved.png", prompt="p", duration_seconds=5
         )
         self._enqueue_video()
         claimed = jobs.claim_next_job("w1")
@@ -149,16 +134,13 @@ class KlingWorkerResumabilityTests(unittest.TestCase):
         self.assertEqual(first, fake.task_id)
         self.assertEqual(fake.submit_calls, 1)
 
-        # A re-claimed job now carries the persisted task id: no second submit.
         resumed_job = jobs.get_job(claimed["id"])
         second = worker._submit_or_resume_task(fake, request, resumed_job)
         self.assertEqual(second, fake.task_id)
         self.assertEqual(fake.submit_calls, 1)
 
-    # --- happy path -------------------------------------------------------
-
     def test_video_job_completes_stores_result_and_updates_shot(self):
-        fake = _FakeKling([_SUCCEED])
+        fake = _FakeSeedance([_SUCCEED])
         self._use_provider(fake)
         job = self._enqueue_video()
 
@@ -166,25 +148,17 @@ class KlingWorkerResumabilityTests(unittest.TestCase):
 
         self.assertEqual(done["status"], "completed")
         self.assertEqual(fake.submit_calls, 1)
-        # Result URL stored in media_results.
         videos = [
-            m for m in shots.list_media_results(self.shot["id"])
-            if m["media_type"] == "video"
+            m for m in shots.list_media_results(self.shot["id"]) if m["media_type"] == "video"
         ]
         self.assertEqual(len(videos), 1)
         self.assertEqual(videos[0]["url"], _SUCCEED["url"])
-        self.assertEqual(videos[0]["provider"], "kling")
-        # Shot status advanced.
+        self.assertEqual(videos[0]["provider"], "seedance")
         self.assertEqual(shots.get_shot(self.shot["id"])["status"], "וידאו טיוטה")
-        # Task id persisted on the job.
         self.assertEqual(jobs.get_job(job["id"])["provider_task_id"], fake.task_id)
 
-    # --- no duplicate submission on retry --------------------------------
-
     def test_retryable_poll_failure_does_not_resubmit_on_retry(self):
-        # First poll raises a retryable timeout after the task was submitted;
-        # the second attempt must resume the same task, not submit a new one.
-        fake = _FakeKling([TimeoutError("slow"), _SUCCEED])
+        fake = _FakeSeedance([TimeoutError("slow"), _SUCCEED])
         self._use_provider(fake)
         job = self._enqueue_video(max_attempts=3)
 
@@ -195,62 +169,41 @@ class KlingWorkerResumabilityTests(unittest.TestCase):
 
         second = worker.process_one_job("w1")
         self.assertEqual(second["status"], "completed")
-        # Still exactly one submission across the whole retry sequence.
+        # This is the core regression check: exactly one submission across
+        # the whole retry sequence, never a second paid fal.ai request.
         self.assertEqual(fake.submit_calls, 1)
-        videos = [
-            m for m in shots.list_media_results(self.shot["id"])
-            if m["media_type"] == "video"
-        ]
-        self.assertEqual(len(videos), 1)
-        self.assertEqual(videos[0]["url"], _SUCCEED["url"])
 
-    # --- stale-job reclaim (worker restart) ------------------------------
+    def test_authentication_failure_is_not_retried(self):
+        fake = _FakeSeedance([_AUTH_FAILED])
+        self._use_provider(fake)
+        self._enqueue_video(max_attempts=3)
+
+        done = worker.process_one_job("w1")
+
+        self.assertEqual(done["status"], "failed")
+        self.assertIn("authentication_failed", done["last_error"])
+        self.assertEqual(fake.submit_calls, 1)
 
     def _age_job(self, job_id, seconds):
         cutoff = (
             datetime.now(timezone.utc) - timedelta(seconds=seconds)
         ).strftime("%Y-%m-%d %H:%M:%S")
-        with closing_conn() as conn:
-            conn.execute(
-                "UPDATE media_jobs SET updated_at=? WHERE id=?", (cutoff, job_id)
-            )
+        with _closing_conn() as conn:
+            conn.execute("UPDATE media_jobs SET updated_at=? WHERE id=?", (cutoff, job_id))
             conn.commit()
-
-    def test_reclaim_requeues_stale_running_job(self):
-        self._enqueue_video()
-        claimed = jobs.claim_next_job("w1")
-        self.assertEqual(claimed["status"], "running")
-        self._age_job(claimed["id"], jobs.STALE_RUNNING_SECONDS + 60)
-
-        reclaimed = jobs.reclaim_stale_jobs()
-        self.assertIn(claimed["id"], reclaimed)
-        self.assertEqual(jobs.get_job(claimed["id"])["status"], "retrying")
-
-    def test_reclaim_ignores_fresh_running_job(self):
-        self._enqueue_video()
-        claimed = jobs.claim_next_job("w1")
-        reclaimed = jobs.reclaim_stale_jobs()
-        self.assertNotIn(claimed["id"], reclaimed)
-        self.assertEqual(jobs.get_job(claimed["id"])["status"], "running")
-
-    def test_reclaim_marks_exhausted_job_failed(self):
-        self._enqueue_video(max_attempts=1)
-        claimed = jobs.claim_next_job("w1")  # attempts -> 1 == max_attempts
-        self._age_job(claimed["id"], jobs.STALE_RUNNING_SECONDS + 60)
-        jobs.reclaim_stale_jobs()
-        self.assertEqual(jobs.get_job(claimed["id"])["status"], "failed")
 
     def test_worker_restart_resumes_persisted_task_without_resubmitting(self):
         # Simulate a worker that submitted, persisted the task id, then died
-        # mid-poll: the job is left 'running' and stale, and the fake provider
-        # will refuse a second submit by asserting submit is never called.
+        # mid-poll (the exact bug this fix closes): the job is left 'running'
+        # and stale, and the fake provider refuses a second submit by
+        # asserting submit_calls stays at 0 across the whole restart+resume.
         self._enqueue_video()
         claimed = jobs.claim_next_job("w1")
-        jobs.record_provider_task_id(claimed["id"], "kling-task-abc123")
+        task_id = "bytedance/seedance-2.0/image-to-video::already-submitted-req"
+        jobs.record_provider_task_id(claimed["id"], task_id)
         self._age_job(claimed["id"], jobs.STALE_RUNNING_SECONDS + 60)
 
-        # Fresh worker starts: reclaim, then process. submit must NOT run.
-        fake = _FakeKling([_SUCCEED])
+        fake = _FakeSeedance([_SUCCEED], task_id=task_id)
         self._use_provider(fake)
         jobs.reclaim_stale_jobs()
 
@@ -259,14 +212,13 @@ class KlingWorkerResumabilityTests(unittest.TestCase):
         self.assertEqual(fake.submit_calls, 0)
         self.assertEqual(fake.check_calls, 1)
         videos = [
-            m for m in shots.list_media_results(self.shot["id"])
-            if m["media_type"] == "video"
+            m for m in shots.list_media_results(self.shot["id"]) if m["media_type"] == "video"
         ]
         self.assertEqual(len(videos), 1)
         self.assertEqual(videos[0]["url"], _SUCCEED["url"])
 
 
-def closing_conn():
+def _closing_conn():
     from contextlib import closing
 
     return closing(get_connection())
