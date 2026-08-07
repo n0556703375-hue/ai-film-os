@@ -3,12 +3,15 @@
 Environment variables required:
     FAL_API_KEY             — fal.ai API key from https://fal.ai/dashboard
     FAL_SEEDANCE_MODEL      — optional override (default: bytedance/seedance-2.0/image-to-video)
-    FAL_SEEDANCE_FAST_MODEL — fast tier (default: bytedance/seedance-2.0/image-to-video-fast)
+    FAL_SEEDANCE_FAST_MODEL — fast tier (default: bytedance/seedance-2.0/fast/image-to-video)
     FAL_API_BASE            — optional base URL (default: https://queue.fal.run)
 """
 
 import time
+from urllib.parse import urlparse
+
 import httpx
+
 from app.core.config import settings
 from app.services.video_provider import (
     VideoGenerationRequest,
@@ -34,7 +37,7 @@ _CAMERA_MOTION_PHRASES = {
 
 _COST_PER_SECOND = {
     "bytedance/seedance-2.0/image-to-video": 0.045,
-    "bytedance/seedance-2.0/image-to-video-fast": 0.025,
+    "bytedance/seedance-2.0/fast/image-to-video": 0.025,
 }
 
 
@@ -91,30 +94,47 @@ def _extract_video_url(body: dict) -> str:
         if isinstance(first, dict):
             return first.get("url", "")
         return str(first)
-    raise RuntimeError(f"fal.ai לא החזיר URL לווידאו. תגובה: {str(body)[:300]}")
+    raise RuntimeError("fal.ai returned a completed response without a video URL")
 
 
-def _poll_until_complete(model: str, request_id: str) -> str:
-    status_url = f"{settings.fal_api_base}/{model}/requests/{request_id}/status"
-    result_url = f"{settings.fal_api_base}/{model}/requests/{request_id}"
+def _queue_url(value: object, fallback: str) -> str:
+    """Use fal's returned queue URL only when it stays on the configured queue host."""
+    candidate = value.strip() if isinstance(value, str) else ""
+    if not candidate:
+        return fallback
+
+    parsed = urlparse(candidate)
+    base = urlparse(settings.fal_api_base)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.hostname != base.hostname:
+        raise RuntimeError("fal.ai returned an invalid queue URL")
+    return candidate
+
+
+def _poll_until_complete(status_url: str, result_url: str) -> str:
     for _ in range(_MAX_POLLS):
         time.sleep(_POLL_INTERVAL)
         with httpx.Client(timeout=20.0) as client:
             resp = client.get(status_url, headers=_headers())
         if resp.status_code != 200:
-            raise RuntimeError(f"fal.ai polling שגיאה {resp.status_code}: {resp.text[:200]}")
+            raise RuntimeError(f"fal.ai polling failed with HTTP {resp.status_code}")
+
         data = resp.json()
         status = data.get("status", "")
+        if status in {"IN_QUEUE", "IN_PROGRESS"}:
+            continue
         if status == "COMPLETED":
+            if data.get("error") or data.get("error_type"):
+                raise RuntimeError("fal.ai generation failed")
             with httpx.Client(timeout=20.0) as client:
                 result_resp = client.get(result_url, headers=_headers())
             if result_resp.status_code != 200:
-                raise RuntimeError(f"fal.ai result fetch שגיאה {result_resp.status_code}: {result_resp.text[:200]}")
+                raise RuntimeError(f"fal.ai result fetch failed with HTTP {result_resp.status_code}")
             return _extract_video_url(result_resp.json())
-        if status == "FAILED":
-            error_msg = data.get("error") or data.get("message") or "Unknown error"
-            raise RuntimeError(f"fal.ai קידוד נכשל: {str(error_msg)[:200]}")
-    raise TimeoutError(f"fal.ai לא השלים את יצירת הווידאו אחרי {_POLL_INTERVAL * _MAX_POLLS:.0f} שניות.")
+        raise RuntimeError("fal.ai returned an unknown queue status")
+
+    raise TimeoutError(
+        f"fal.ai did not complete video generation within {_POLL_INTERVAL * _MAX_POLLS:.0f} seconds"
+    )
 
 
 class SeedanceProvider:
@@ -152,14 +172,23 @@ class SeedanceProvider:
             resp = client.post(submit_url, json=payload, headers=_headers())
 
         if resp.status_code not in {200, 202}:
-            raise RuntimeError(f"fal.ai submission שגיאה {resp.status_code}: {resp.text[:200]}")
+            raise RuntimeError(f"fal.ai submission failed with HTTP {resp.status_code}")
 
         data = resp.json()
         request_id = data.get("request_id")
         if not request_id:
-            raise RuntimeError(f"fal.ai לא החזיר request_id. תגובה: {str(data)[:300]}")
+            raise RuntimeError("fal.ai submission did not return request_id")
 
-        video_url = _poll_until_complete(model, request_id)
+        fallback_status_url = (
+            f"{settings.fal_api_base}/{model}/requests/{request_id}/status"
+        )
+        fallback_result_url = (
+            f"{settings.fal_api_base}/{model}/requests/{request_id}/response"
+        )
+        status_url = _queue_url(data.get("status_url"), fallback_status_url)
+        result_url = _queue_url(data.get("response_url"), fallback_result_url)
+
+        video_url = _poll_until_complete(status_url, result_url)
         cost = _estimate_cost(request.duration_seconds, model)
 
         return VideoGenerationResult(
