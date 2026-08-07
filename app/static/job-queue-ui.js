@@ -91,8 +91,16 @@ async function waitForMediaJob(shotId, jobId, mediaLabel = "מדיה") {
     if (job.status === "failed") {
       throw new Error(job.last_error || `יצירת ${mediaLabel} נכשלה.`);
     }
+    // Once the provider task id is persisted, generation has been submitted
+    // (and may already be complete on the provider's side) — most of the
+    // remaining wait for a video job is downloading/storing the result
+    // locally, so this is a more accurate status than a bare "running".
+    const statusLine =
+      mediaLabel === "וידאו" && job.provider_task_id
+        ? "שומר את הווידאו…"
+        : `סטטוס: ${esc(job.status)} · ניסיון ${Number(job.attempts || 0)} מתוך ${Number(job.max_attempts || 0)}`;
     $("modalContent").innerHTML = `<h2>יצירת ${mediaLabel} בתור הרקע</h2>
-      <p>סטטוס: ${esc(job.status)} · ניסיון ${Number(job.attempts || 0)} מתוך ${Number(job.max_attempts || 0)}</p>
+      <p>${statusLine}</p>
       <p class="meta">אפשר לסגור את החלון; המשימה תמשיך ברקע.</p>`;
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }

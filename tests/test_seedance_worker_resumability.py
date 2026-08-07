@@ -15,12 +15,14 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from app.core.config import settings
 from app.database.connection import get_connection, init_db
 from app.repositories import jobs, projects, scenes, shots
 from app.repositories.approvals import APPROVED
 from app.services.seedance_provider import SeedanceProvider
+from app.services.video_persistence import VideoPersistenceError
 from app.services.video_provider import VideoGenerationRequest
 import app.worker as worker
 
@@ -108,6 +110,22 @@ class SeedanceWorkerResumabilityTests(unittest.TestCase):
         worker.time.sleep = lambda *_a, **_k: None
         self._real_get_provider = worker.get_video_provider
 
+        # persist_remote_video() makes a real network call to download the
+        # provider's video; these tests exercise worker orchestration, not
+        # that download itself (covered in isolation by
+        # tests/test_video_persistence.py), so it defaults to a stand-in
+        # success. Tests that care about persistence behavior override this.
+        self.persisted_url = f"/generated/videos/shot-{self.shot['id']}/mocked-uuid.mp4"
+        self.persist_calls = []
+
+        def _fake_persist(provider_video_url, shot_id):
+            self.persist_calls.append((provider_video_url, shot_id))
+            return {"url": self.persisted_url, "size_bytes": 1024, "content_type": "video/mp4"}
+
+        persist_patcher = patch("app.worker.persist_remote_video", side_effect=_fake_persist)
+        self.mock_persist = persist_patcher.start()
+        self.addCleanup(persist_patcher.stop)
+
     def tearDown(self):
         worker.time.sleep = self._real_sleep
         worker.get_video_provider = self._real_get_provider
@@ -152,10 +170,15 @@ class SeedanceWorkerResumabilityTests(unittest.TestCase):
             m for m in shots.list_media_results(self.shot["id"]) if m["media_type"] == "video"
         ]
         self.assertEqual(len(videos), 1)
-        self.assertEqual(videos[0]["url"], _SUCCEED["url"])
+        # The persisted AI Film OS URL is stored, never the provider's — the
+        # browser must not depend on the external fal.ai video URL.
+        self.assertEqual(videos[0]["url"], self.persisted_url)
+        self.assertNotEqual(videos[0]["url"], _SUCCEED["url"])
         self.assertEqual(videos[0]["provider"], "seedance")
         self.assertEqual(shots.get_shot(self.shot["id"])["status"], "וידאו טיוטה")
         self.assertEqual(jobs.get_job(job["id"])["provider_task_id"], fake.task_id)
+        # persist_remote_video() must receive the provider's own video URL.
+        self.assertEqual(self.persist_calls, [(_SUCCEED["url"], self.shot["id"])])
 
     def test_completed_job_is_never_reclaimed_or_reprocessed(self):
         fake = _FakeSeedance([_SUCCEED])
@@ -231,7 +254,104 @@ class SeedanceWorkerResumabilityTests(unittest.TestCase):
             m for m in shots.list_media_results(self.shot["id"]) if m["media_type"] == "video"
         ]
         self.assertEqual(len(videos), 1)
-        self.assertEqual(videos[0]["url"], _SUCCEED["url"])
+        self.assertEqual(videos[0]["url"], self.persisted_url)
+
+    # --- video persistence integration (item 11-14 of the persistence gate) ---
+
+    def test_persistence_failure_does_not_mark_job_completed(self):
+        fake = _FakeSeedance([_SUCCEED])
+        self._use_provider(fake)
+        self._enqueue_video()
+        self.mock_persist.side_effect = VideoPersistenceError(VideoPersistenceError.UNREACHABLE)
+
+        done = worker.process_one_job("w1")
+
+        self.assertNotEqual(done["status"], "completed")
+        self.assertEqual(done["status"], "retrying")
+        self.assertIn("video_persistence_failed", done["last_error"])
+        videos = [
+            m for m in shots.list_media_results(self.shot["id"]) if m["media_type"] == "video"
+        ]
+        self.assertEqual(videos, [], "no media_result may exist until persistence succeeds")
+        # The provider generation already succeeded and was paid for — the
+        # failure was purely in the local download/storage step.
+        self.assertEqual(fake.submit_calls, 1)
+
+    def test_persistence_retry_does_not_create_a_second_seedance_submission(self):
+        # provider completed -> persistence fails -> job retried -> resumes
+        # the existing provider result -> persistence succeeds. Only the
+        # download/storage step is retried; fal.ai is never re-submitted to.
+        fake = _FakeSeedance([_SUCCEED, _SUCCEED])
+        self._use_provider(fake)
+        job = self._enqueue_video(max_attempts=3)
+
+        self.mock_persist.side_effect = VideoPersistenceError(VideoPersistenceError.WRITE_FAILED)
+        first = worker.process_one_job("w1")
+        self.assertEqual(first["status"], "retrying")
+        self.assertEqual(fake.submit_calls, 1)
+        self.assertEqual(jobs.get_job(job["id"])["provider_task_id"], fake.task_id)
+
+        # Second attempt: persistence now succeeds.
+        self.mock_persist.side_effect = None
+        self.mock_persist.return_value = {
+            "url": self.persisted_url,
+            "size_bytes": 1024,
+            "content_type": "video/mp4",
+        }
+        second = worker.process_one_job("w1")
+
+        self.assertEqual(second["status"], "completed")
+        # This is the exact billing-safety invariant this fix protects: two
+        # process_one_job() attempts, exactly one Seedance submission.
+        self.assertEqual(fake.submit_calls, 1)
+        self.assertEqual(fake.check_calls, 2)
+        videos = [
+            m for m in shots.list_media_results(self.shot["id"]) if m["media_type"] == "video"
+        ]
+        self.assertEqual(len(videos), 1)
+        self.assertEqual(videos[0]["url"], self.persisted_url)
+
+    def test_existing_provider_task_id_is_reused_across_persistence_retries(self):
+        fake = _FakeSeedance([_SUCCEED, _SUCCEED, _SUCCEED])
+        self._use_provider(fake)
+        self._enqueue_video(max_attempts=5)
+
+        self.mock_persist.side_effect = VideoPersistenceError(VideoPersistenceError.UNREACHABLE)
+        worker.process_one_job("w1")
+        worker.process_one_job("w1")
+        task_id_after_two_failures = fake.task_id
+
+        self.mock_persist.side_effect = None
+        self.mock_persist.return_value = {
+            "url": self.persisted_url,
+            "size_bytes": 1024,
+            "content_type": "video/mp4",
+        }
+        done = worker.process_one_job("w1")
+
+        self.assertEqual(done["status"], "completed")
+        self.assertEqual(done["provider_task_id"], task_id_after_two_failures)
+        self.assertEqual(fake.submit_calls, 1, "three attempts, still exactly one submission")
+
+    def test_media_result_and_metadata_never_contain_the_provider_video_url(self):
+        fake = _FakeSeedance([_SUCCEED])
+        self._use_provider(fake)
+        self._enqueue_video()
+
+        done = worker.process_one_job("w1")
+
+        video = next(
+            m for m in shots.list_media_results(self.shot["id"]) if m["media_type"] == "video"
+        )
+        serialized = str(video) + str(done)
+        self.assertNotIn("cdn.fal.example", serialized)
+        self.assertNotIn(_SUCCEED["url"], serialized)
+
+    def test_video_persistence_error_message_is_sanitized_and_retryable(self):
+        error = VideoPersistenceError(VideoPersistenceError.PRIVATE_HOST)
+        self.assertTrue(error.retryable)
+        self.assertEqual(str(error), "video_persistence_failed: private_host")
+        self.assertNotIn("fal.media", str(error))
 
 
 def _closing_conn():

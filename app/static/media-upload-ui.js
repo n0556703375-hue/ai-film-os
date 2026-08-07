@@ -136,6 +136,7 @@ const FAILURE_CATEGORY_LABELS = {
   provider_timeout: "ספק הווידאו לא הגיב בזמן. ניתן לנסות שוב.",
   provider_failed: "ספק הווידאו נתקל בשגיאה. ניתן לנסות שוב.",
   invalid_provider_response: "ספק הווידאו החזיר תגובה לא צפויה.",
+  video_persistence_failed: "הווידאו נוצר, אך שמירת הקובץ במערכת נכשלה. ניתן לנסות שוב.",
 };
 
 function friendlyFailureMessage(rawError) {

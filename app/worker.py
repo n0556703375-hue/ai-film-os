@@ -12,6 +12,7 @@ from app.services.generation import (
     validate_generated_image,
 )
 from app.services.video_model_selector import select_video_model
+from app.services.video_persistence import persist_remote_video
 from app.services.video_provider import (
     VideoGenerationRequest,
     VideoGenerationResult,
@@ -367,10 +368,17 @@ def _process_video_job(job: dict) -> dict:
         # contract goes through the resumable path: the task id is
         # persisted before polling so a crash/retry never resubmits.
         task_id = _submit_or_resume_task(provider, request, job)
-        video_url = _wait_for_provider_task(provider, task_id)
+        provider_video_url = _wait_for_provider_task(provider, task_id)
         model, cost = _resolve_model_and_cost(provider, request)
+        # The browser must never depend on the provider's own video URL for
+        # playback (it can be blocked by network filtering, or expire) — the
+        # generation itself is already paid for and complete at this point,
+        # so a persistence failure here is retryable purely as a re-download,
+        # never as a reason to resubmit to the provider (see
+        # _submit_or_resume_task: provider_task_id is already persisted).
+        persisted = persist_remote_video(provider_video_url, job["shot_id"])
         result = VideoGenerationResult(
-            url=video_url,
+            url=persisted["url"],
             provider=getattr(provider, "name", ""),
             model=model,
             external_task_id=task_id,
