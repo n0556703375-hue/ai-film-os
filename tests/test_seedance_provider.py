@@ -14,10 +14,14 @@ class SeedanceProviderClientTests(unittest.TestCase):
         self.original_model = settings.fal_seedance_model
         self.original_fast_model = settings.fal_seedance_fast_model
         self.original_fal_key_env = os.environ.get("FAL_KEY")
+        self.original_render_external_url = os.environ.get("RENDER_EXTERNAL_URL")
+        self.original_public_base_url = os.environ.get("PUBLIC_BASE_URL")
 
         settings.fal_api_key = "test-key"
         settings.fal_seedance_model = "bytedance/seedance-2.0/image-to-video"
         settings.fal_seedance_fast_model = "bytedance/seedance-2.0/fast/image-to-video"
+        os.environ.pop("PUBLIC_BASE_URL", None)
+        os.environ.pop("RENDER_EXTERNAL_URL", None)
         self.request = VideoGenerationRequest(
             image_url="https://cdn.example/approved.png",
             prompt="subtle cinematic motion",
@@ -33,6 +37,14 @@ class SeedanceProviderClientTests(unittest.TestCase):
             os.environ.pop("FAL_KEY", None)
         else:
             os.environ["FAL_KEY"] = self.original_fal_key_env
+        if self.original_render_external_url is None:
+            os.environ.pop("RENDER_EXTERNAL_URL", None)
+        else:
+            os.environ["RENDER_EXTERNAL_URL"] = self.original_render_external_url
+        if self.original_public_base_url is None:
+            os.environ.pop("PUBLIC_BASE_URL", None)
+        else:
+            os.environ["PUBLIC_BASE_URL"] = self.original_public_base_url
 
     def test_provider_requires_key(self):
         settings.fal_api_key = ""
@@ -71,6 +83,57 @@ class SeedanceProviderClientTests(unittest.TestCase):
         self.assertNotIn("height", payload)
         self.assertNotIn("width", payload)
         handler.get.assert_called_once_with()
+
+    @patch("app.services.seedance_provider.fal_client.submit")
+    def test_relative_generated_image_uses_render_public_url(self, mock_submit):
+        os.environ["RENDER_EXTERNAL_URL"] = "https://ai-film-os.onrender.com"
+        handler = MagicMock()
+        handler.request_id = "req-relative"
+        handler.get.return_value = {"video": {"url": "https://cdn.example/video.mp4"}}
+        mock_submit.return_value = handler
+        request = VideoGenerationRequest(
+            image_url="/generated/shot-1.png",
+            prompt=self.request.prompt,
+            duration_seconds=5,
+            aspect_ratio="16:9",
+        )
+
+        SeedanceProvider().generate(request)
+
+        payload = mock_submit.call_args.kwargs["arguments"]
+        self.assertEqual(
+            payload["image_url"],
+            "https://ai-film-os.onrender.com/generated/shot-1.png",
+        )
+
+    @patch("app.services.seedance_provider.fal_client.submit")
+    def test_relative_image_without_public_base_is_rejected_before_submit(self, mock_submit):
+        request = VideoGenerationRequest(
+            image_url="/generated/shot-1.png",
+            prompt=self.request.prompt,
+            duration_seconds=5,
+        )
+
+        with self.assertRaisesRegex(ValueError, "no public service URL"):
+            SeedanceProvider().generate(request)
+        mock_submit.assert_not_called()
+
+    @patch("app.services.seedance_provider.fal_client.submit")
+    def test_local_or_insecure_image_url_is_rejected_before_submit(self, mock_submit):
+        for image_url in (
+            "http://example.com/image.png",
+            "https://localhost/image.png",
+            "https://127.0.0.1/image.png",
+        ):
+            with self.subTest(image_url=image_url):
+                request = VideoGenerationRequest(
+                    image_url=image_url,
+                    prompt=self.request.prompt,
+                    duration_seconds=5,
+                )
+                with self.assertRaises(ValueError):
+                    SeedanceProvider().generate(request)
+        mock_submit.assert_not_called()
 
     @patch("app.services.seedance_provider.fal_client.submit")
     def test_duration_is_clamped_to_supported_seedance_range(self, mock_submit):
