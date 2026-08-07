@@ -179,6 +179,40 @@ SCREENPLAY SEGMENT:\n{chunk}
     return _extract_json_array(response.output_text or "")
 
 
+def _normalize_scenes(scenes: list[dict], *, start_number: int = 1) -> list[dict]:
+    """Return deterministic scene metadata independent of provider numbering.
+
+    Providers process screenplay chunks independently and may restart
+    ``scene_number`` inside every chunk.  The application owns the global scene
+    sequence, so both the one-shot and resumable import paths assign contiguous
+    numbers before persistence.
+    """
+    normalized = []
+    for offset, scene in enumerate(scenes):
+        scene_number = start_number + offset
+        try:
+            shot_count = max(1, min(60, int(scene.get("recommended_shot_count") or 6)))
+            duration = max(5, float(scene.get("estimated_duration_seconds") or 60))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"OpenAI החזיר נתונים מספריים לא תקינים בסצנה {scene_number}."
+            ) from exc
+        normalized.append({
+            "scene_number": scene_number,
+            "title": str(scene.get("title") or f"סצנה {scene_number}")[:300],
+            "status": "מתוכנן",
+            "story_goal": str(scene.get("story_goal") or ""),
+            "emotion": str(scene.get("emotion") or ""),
+            "conflict": str(scene.get("conflict") or ""),
+            "beginning": str(scene.get("beginning") or ""),
+            "ending": str(scene.get("ending") or ""),
+            "notes": str(scene.get("notes") or ""),
+            "estimated_duration_seconds": duration,
+            "recommended_shot_count": shot_count,
+        })
+    return normalized
+
+
 def breakdown_screenplay(project: dict, screenplay: str, target_shots_per_minute: float = 5.0) -> list[dict]:
     if not settings.openai_api_key:
         raise GenerationNotConfigured("OPENAI_API_KEY אינו מוגדר.")
@@ -206,24 +240,4 @@ def breakdown_screenplay(project: dict, screenplay: str, target_shots_per_minute
                 f"פירוק התסריט נכשל במקטע {index} מתוך {len(chunks)}: {exc}"
             ) from exc
 
-    normalized = []
-    for index, scene in enumerate(scenes, 1):
-        try:
-            shot_count = max(1, min(60, int(scene.get("recommended_shot_count") or 6)))
-            duration = max(5, float(scene.get("estimated_duration_seconds") or 60))
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError(f"OpenAI החזיר נתונים מספריים לא תקינים בסצנה {index}.") from exc
-        normalized.append({
-            "scene_number": index,
-            "title": str(scene.get("title") or f"סצנה {index}")[:300],
-            "status": "מתוכנן",
-            "story_goal": str(scene.get("story_goal") or ""),
-            "emotion": str(scene.get("emotion") or ""),
-            "conflict": str(scene.get("conflict") or ""),
-            "beginning": str(scene.get("beginning") or ""),
-            "ending": str(scene.get("ending") or ""),
-            "notes": str(scene.get("notes") or ""),
-            "estimated_duration_seconds": duration,
-            "recommended_shot_count": shot_count,
-        })
-    return normalized
+    return _normalize_scenes(scenes)

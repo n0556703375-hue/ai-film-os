@@ -21,9 +21,46 @@ class ResumableScreenplayImportTests(unittest.TestCase):
         process_next_chunk({"id": 7}, state)
 
         self.assertEqual(state.next_chunk_index, 1)
-        self.assertEqual(state.scenes, [{"title": "א"}])
+        self.assertEqual(state.scenes[0]["scene_number"], 1)
+        self.assertEqual(state.scenes[0]["title"], "א")
+        self.assertEqual(state.scenes[0]["status"], "מתוכנן")
+        self.assertEqual(state.scenes[0]["recommended_shot_count"], 6)
         self.assertFalse(state.completed)
         breakdown_chunk.assert_called_once()
+
+    @patch("app.services.resumable_screenplay_import._breakdown_chunk")
+    def test_assigns_unique_global_scene_numbers_across_chunks(self, breakdown_chunk):
+        breakdown_chunk.side_effect = [
+            [{"scene_number": 1, "title": "פתיחה"}],
+            [{"scene_number": 1, "title": "המשך"}],
+        ]
+        state = ImportRunState(project_id=7, screenplay="א" * 6000)
+
+        process_next_chunk({"id": 7}, state)
+        process_next_chunk({"id": 7}, state)
+
+        self.assertTrue(state.completed)
+        self.assertEqual(
+            [(scene["scene_number"], scene["title"]) for scene in state.scenes],
+            [(1, "פתיחה"), (2, "המשך")],
+        )
+
+    @patch("app.services.resumable_screenplay_import._breakdown_chunk")
+    def test_normalizes_provider_bounds_before_returning_resumable_state(self, breakdown_chunk):
+        breakdown_chunk.return_value = [{
+            "scene_number": 99,
+            "title": "",
+            "estimated_duration_seconds": 1,
+            "recommended_shot_count": 999,
+        }]
+        state = ImportRunState(project_id=7, screenplay="א" * 80)
+
+        process_next_chunk({"id": 7}, state)
+
+        self.assertEqual(state.scenes[0]["scene_number"], 1)
+        self.assertEqual(state.scenes[0]["title"], "סצנה 1")
+        self.assertEqual(state.scenes[0]["estimated_duration_seconds"], 5)
+        self.assertEqual(state.scenes[0]["recommended_shot_count"], 60)
 
     @patch("app.services.resumable_screenplay_import._breakdown_chunk")
     def test_completed_state_is_idempotent(self, breakdown_chunk):
