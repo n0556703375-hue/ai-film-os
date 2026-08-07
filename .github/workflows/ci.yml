@@ -97,8 +97,8 @@ jobs:
           backup_path = Path(os.environ["FILM_OS_BACKUP_DB"])
 
           # Build the source through the real runtime init/migration path so
-          # the effective 12-table schema (including scene_asset_variants and
-          # every migrate_database column) exists before the fixture data
+          # the effective 17-table schema (including screenplay import tables
+          # and every migrate_database column) exists before the fixture data
           # goes in, exactly like the application does on first boot.
           original_path = settings.database_path
           try:
@@ -181,6 +181,11 @@ jobs:
               "media_results": 1,
               "approval_events": 1,
               "media_jobs": 0,
+              "import_runs": 0,
+              "scene_content_blocks": 0,
+              "screenplay_characters": 0,
+              "screenplay_locations": 0,
+              "scene_characters": 0,
           }
 
           # Guard against this fixture silently falling behind the real
