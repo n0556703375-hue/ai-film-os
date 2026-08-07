@@ -40,7 +40,7 @@ class Settings:
     fal_api_key = os.getenv("FAL_API_KEY", "").strip()
     fal_api_base = os.getenv("FAL_API_BASE", "https://queue.fal.run").rstrip("/")
     fal_seedance_model = os.getenv("FAL_SEEDANCE_MODEL", "bytedance/seedance-2.0/image-to-video")
-    fal_seedance_fast_model = os.getenv("FAL_SEEDANCE_FAST_MODEL", "bytedance/seedance-2.0/image-to-video-fast")
+    fal_seedance_fast_model = os.getenv("FAL_SEEDANCE_FAST_MODEL", "bytedance/seedance-2.0/fast/image-to-video")
     # Kling (legacy provider, kept for test support)
     kling_access_key = os.getenv("KLING_ACCESS_KEY", "").strip()
     kling_secret_key = os.getenv("KLING_SECRET_KEY", "").strip()

@@ -62,7 +62,7 @@ def _model_for(profile: str) -> str:
 
 def _headers() -> dict:
     return {
-        "Authorization": f"Key {settings.fal_api_key}",
+        "Authorization": f"Key {settings.fal_api_key.strip()}",
         "Content-Type": "application/json",
         "Accept": "application/json",
         "User-Agent": "AI-Film-OS/1.0",
