@@ -16,6 +16,7 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from app.core.config import settings
 from app.database.connection import get_connection, init_db
@@ -103,6 +104,18 @@ class KlingWorkerResumabilityTests(unittest.TestCase):
         worker.time.sleep = lambda *_a, **_k: None
         self._real_get_provider = worker.get_video_provider
 
+        # persist_remote_video() makes a real network call to download the
+        # provider's video; that download is covered in isolation by
+        # tests/test_video_persistence.py, so it's stubbed here to a
+        # stand-in success — these tests exercise worker orchestration.
+        self.persisted_url = f"/generated/videos/shot-{self.shot['id']}/mocked-uuid.mp4"
+        persist_patcher = patch(
+            "app.worker.persist_remote_video",
+            return_value={"url": self.persisted_url, "size_bytes": 1024, "content_type": "video/mp4"},
+        )
+        self.mock_persist = persist_patcher.start()
+        self.addCleanup(persist_patcher.stop)
+
     def tearDown(self):
         worker.time.sleep = self._real_sleep
         worker.get_video_provider = self._real_get_provider
@@ -172,7 +185,7 @@ class KlingWorkerResumabilityTests(unittest.TestCase):
             if m["media_type"] == "video"
         ]
         self.assertEqual(len(videos), 1)
-        self.assertEqual(videos[0]["url"], _SUCCEED["url"])
+        self.assertEqual(videos[0]["url"], self.persisted_url)
         self.assertEqual(videos[0]["provider"], "kling")
         # Shot status advanced.
         self.assertEqual(shots.get_shot(self.shot["id"])["status"], "וידאו טיוטה")
@@ -202,7 +215,7 @@ class KlingWorkerResumabilityTests(unittest.TestCase):
             if m["media_type"] == "video"
         ]
         self.assertEqual(len(videos), 1)
-        self.assertEqual(videos[0]["url"], _SUCCEED["url"])
+        self.assertEqual(videos[0]["url"], self.persisted_url)
 
     # --- stale-job reclaim (worker restart) ------------------------------
 
@@ -263,7 +276,7 @@ class KlingWorkerResumabilityTests(unittest.TestCase):
             if m["media_type"] == "video"
         ]
         self.assertEqual(len(videos), 1)
-        self.assertEqual(videos[0]["url"], _SUCCEED["url"])
+        self.assertEqual(videos[0]["url"], self.persisted_url)
 
 
 def closing_conn():
