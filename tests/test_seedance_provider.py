@@ -28,6 +28,15 @@ class SeedanceProviderTestBase(unittest.TestCase):
         settings.fal_seedance_fast_model = "bytedance/seedance-2.0/fast/image-to-video"
         os.environ.pop("PUBLIC_BASE_URL", None)
         os.environ.pop("RENDER_EXTERNAL_URL", None)
+
+        # Preflight reachability (a real bounded HTTP fetch) is covered on
+        # its own in tests/test_public_media_url.py; provider tests stay
+        # hermetic by assuming any normalized URL preflights clean unless a
+        # specific test overrides this.
+        preflight_patcher = patch("app.services.seedance_provider.preflight_check_public_image")
+        preflight_patcher.start()
+        self.addCleanup(preflight_patcher.stop)
+
         self.request = VideoGenerationRequest(
             image_url="https://cdn.example/approved.png",
             prompt="subtle cinematic motion",
@@ -138,6 +147,18 @@ class SeedanceSubmitTests(SeedanceProviderTestBase):
                 self.assertEqual(
                     ctx.exception.category, SeedanceErrorCategory.SOURCE_IMAGE_UNREACHABLE
                 )
+        mock_submit.assert_not_called()
+
+    @patch("app.services.seedance_provider.preflight_check_public_image")
+    @patch("app.services.seedance_provider.fal_client.submit")
+    def test_unreachable_source_image_is_rejected_before_submit(self, mock_submit, mock_preflight):
+        from app.services.public_media_url import PublicMediaUrlError
+
+        mock_preflight.side_effect = PublicMediaUrlError(PublicMediaUrlError.UNREACHABLE)
+
+        with self.assertRaises(SeedanceProviderError) as ctx:
+            SeedanceProvider().submit(self.request)
+        self.assertEqual(ctx.exception.category, SeedanceErrorCategory.SOURCE_IMAGE_UNREACHABLE)
         mock_submit.assert_not_called()
 
     @patch("app.services.seedance_provider.fal_client.submit")

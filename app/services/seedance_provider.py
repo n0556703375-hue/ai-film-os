@@ -26,13 +26,16 @@ bodies, API keys, or signed URLs. Failures are reported as a stable category
 from ``SeedanceErrorCategory`` plus, at most, a numeric HTTP status.
 """
 
-import ipaddress
 import os
-from urllib.parse import urlparse
 
 import fal_client
 
 from app.core.config import settings
+from app.services.public_media_url import (
+    PublicMediaUrlError,
+    normalize_public_media_url,
+    preflight_check_public_image,
+)
 from app.services.video_provider import (
     VideoGenerationRequest,
     VideoProviderNotConfigured,
@@ -200,49 +203,20 @@ def _estimate_cost(duration_seconds: float, model: str) -> float:
 def _public_image_url(image_url: str) -> str:
     """Return an HTTPS URL that fal.ai can fetch from the public internet.
 
-    AI Film OS may persist internally served media as `/generated/...`. That is
-    valid in the browser but not fetchable by fal.ai unless it is expanded to
-    the service's public Render URL. Absolute URLs must already be public
-    HTTPS endpoints; local/private hosts are rejected before a paid request is
-    submitted.
+    Delegates normalization (expanding AI Film OS's own `/generated/...`
+    paths, rejecting non-HTTPS/local/private hosts) and a bounded preflight
+    fetch (2xx, image/* content-type, size limit, no redirect to a private
+    host) to the centralized ``app.services.public_media_url`` helper, so
+    every caller that needs a provider-fetchable image URL — this provider,
+    the readiness endpoint — shares one implementation instead of scattered
+    copies. A failure here means the *paid* fal.ai submission never happens.
     """
-    value = str(image_url or "").strip()
-    if not value:
-        raise SeedanceProviderError(SeedanceErrorCategory.INVALID_INPUT)
-
-    if value.startswith("/"):
-        public_base = (
-            os.getenv("PUBLIC_BASE_URL", "").strip()
-            or os.getenv("RENDER_EXTERNAL_URL", "").strip()
-        )
-        if not public_base:
-            raise SeedanceProviderError(SeedanceErrorCategory.SOURCE_IMAGE_UNREACHABLE)
-        base = urlparse(public_base)
-        if base.scheme != "https" or not base.hostname:
-            raise SeedanceProviderError(SeedanceErrorCategory.SOURCE_IMAGE_UNREACHABLE)
-        return f"{public_base.rstrip('/')}/{value.lstrip('/')}"
-
-    parsed = urlparse(value)
-    if parsed.scheme != "https" or not parsed.hostname:
-        raise SeedanceProviderError(SeedanceErrorCategory.SOURCE_IMAGE_UNREACHABLE)
-
-    host = parsed.hostname.lower().rstrip(".")
-    if host == "localhost" or host.endswith(".local"):
-        raise SeedanceProviderError(SeedanceErrorCategory.SOURCE_IMAGE_UNREACHABLE)
     try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        address = None
-    if address and (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_unspecified
-    ):
+        public_url = normalize_public_media_url(image_url)
+        preflight_check_public_image(public_url)
+    except PublicMediaUrlError:
         raise SeedanceProviderError(SeedanceErrorCategory.SOURCE_IMAGE_UNREACHABLE)
-
-    return value
+    return public_url
 
 
 def _extract_video_url(body: dict) -> str:
