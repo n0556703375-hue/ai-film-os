@@ -123,7 +123,7 @@ class ScriptImportRequest(BaseModel):
     target_shots_per_minute: float = Field(default=5.0, ge=1.0, le=12.0)
 
 class MediaResultCreate(BaseModel):
-    media_type: Literal["image", "video"]
+    media_type: Literal["image", "video", "audio"]
     url: str = Field(min_length=1, max_length=4000)
     provider: str = Field(default="", max_length=200)
     model: str = Field(default="", max_length=200)

@@ -109,11 +109,17 @@ def decide_media(shot_id: int, media_id: int, decision: str, project_id: int, no
             (new_media_status, notes, notes, media_id),
         )
 
-        new_shot_status = _shot_status_for_media(conn, shot_id)
-        conn.execute(
-            "UPDATE shots SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            (new_shot_status, shot_id),
-        )
+        # Audio is orthogonal to the image/video shot pipeline. Recomputing the
+        # shot status here only considers image/video media, so applying it to an
+        # audio decision would regress a shot that is already further along (for
+        # example pulling a finalized 'סופי' shot back to 'וידאו מאושר'). Leave
+        # the shot's pipeline status untouched for audio decisions.
+        if media["media_type"] != "audio":
+            new_shot_status = _shot_status_for_media(conn, shot_id)
+            conn.execute(
+                "UPDATE shots SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (new_shot_status, shot_id),
+            )
         conn.execute(
             """
             INSERT INTO approval_events
