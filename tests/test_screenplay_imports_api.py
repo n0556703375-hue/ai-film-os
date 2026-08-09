@@ -202,19 +202,19 @@ class UploadChunkApiTests(ScreenplayImportsApiTestCase):
     """Covers /api/screenplay-imports/upload-chunk — the transport-only
     workaround for networks that block a single large POST body but pass
     small ones through (see chunked_screenplay_upload.py). Splitting the
-    text into chunks must produce byte-for-byte the same result as the
-    single-shot endpoint.
+    text into pieces must produce byte-for-byte the same parsed result as
+    the single-shot endpoint. The finalize response is deliberately just
+    an id (a large response can hit the same network filter as a large
+    request) — callers fetch the full breakdown with a separate GET.
     """
 
     def _upload_in_chunks(self, text, chunk_size, *, upload_id="test-upload", import_run_id=None):
-        chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)] or [""]
-        total_chunks = len(chunks)
+        pieces = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)] or [""]
         result = None
-        for index, chunk_text in enumerate(chunks):
+        for index, chunk_text in enumerate(pieces):
             result = api.upload_screenplay_chunk(api.UploadChunkRequest(
-                upload_id=upload_id, chunk_index=index, total_chunks=total_chunks,
-                chunk_text=chunk_text, project_id=self.project["id"],
-                import_run_id=import_run_id,
+                upload_id=upload_id, chunk_text=chunk_text, is_final=(index == len(pieces) - 1),
+                project_id=self.project["id"], import_run_id=import_run_id,
             ))
         return result
 
@@ -223,62 +223,74 @@ class UploadChunkApiTests(ScreenplayImportsApiTestCase):
             api.CreateImportRunRequest(project_id=self.project["id"], screenplay_text=_TWO_SCENES)
         )
         chunked = self._upload_in_chunks(_TWO_SCENES, chunk_size=7, upload_id="upload-a")
-
         self.assertTrue(chunked["completed"])
-        self.assertEqual(chunked["scene_count"], direct["scene_count"])
-        self.assertEqual(chunked["character_count"], direct["character_count"])
-        self.assertEqual(chunked["scenes"], direct["scenes"])
+
+        fetched = api.get_import_run(chunked["import_run_id"])
+        self.assertEqual(fetched["scene_count"], direct["scene_count"])
+        self.assertEqual(fetched["character_count"], direct["character_count"])
+        self.assertEqual(fetched["scenes"], direct["scenes"])
 
     def test_intermediate_chunks_report_progress_without_completing(self):
-        chunks = [_TWO_SCENES[i:i + 5] for i in range(0, len(_TWO_SCENES), 5)]
+        pieces = [_TWO_SCENES[i:i + 5] for i in range(0, len(_TWO_SCENES), 5)]
         first = api.upload_screenplay_chunk(api.UploadChunkRequest(
-            upload_id="upload-b", chunk_index=0, total_chunks=len(chunks),
-            chunk_text=chunks[0], project_id=self.project["id"],
+            upload_id="upload-b", chunk_text=pieces[0], is_final=False,
+            project_id=self.project["id"],
         ))
         self.assertFalse(first["completed"])
-        self.assertEqual(first["received_chunks"], 1)
-        self.assertEqual(first["total_chunks"], len(chunks))
+        self.assertEqual(first["received_chars"], len(pieces[0]))
         # No production writes, and no import run created yet either.
         self.assertEqual(scene_repo.list_scenes(self.project["id"]), [])
 
     def test_chunked_upload_can_reparse_an_existing_run(self):
-        run = self._upload_in_chunks(_SIMPLE_V1, chunk_size=6, upload_id="upload-c")
+        created = self._upload_in_chunks(_SIMPLE_V1, chunk_size=6, upload_id="upload-c")
         reparsed = self._upload_in_chunks(
-            _TWO_SCENES, chunk_size=9, upload_id="upload-d", import_run_id=run["id"],
+            _TWO_SCENES, chunk_size=9, upload_id="upload-d", import_run_id=created["import_run_id"],
         )
         self.assertTrue(reparsed["completed"])
-        self.assertEqual(reparsed["id"], run["id"])
-        self.assertEqual(reparsed["scene_count"], 2)
+        self.assertEqual(reparsed["import_run_id"], created["import_run_id"])
+
+        fetched = api.get_import_run(reparsed["import_run_id"])
+        self.assertEqual(fetched["scene_count"], 2)
 
     def test_reparsing_an_approved_run_via_chunks_is_rejected(self):
-        run = self._upload_in_chunks(_SIMPLE_V1, chunk_size=6, upload_id="upload-e")
-        api.approve_import_run(run["id"], api.ApproveRequest())
+        created = self._upload_in_chunks(_SIMPLE_V1, chunk_size=6, upload_id="upload-e")
+        api.approve_import_run(created["import_run_id"], api.ApproveRequest())
         with self.assertRaises(HTTPException) as ctx:
             self._upload_in_chunks(
-                _TWO_SCENES, chunk_size=9, upload_id="upload-f", import_run_id=run["id"],
+                _TWO_SCENES, chunk_size=9, upload_id="upload-f",
+                import_run_id=created["import_run_id"],
             )
         self.assertEqual(ctx.exception.status_code, 409)
 
     def test_missing_project_is_404(self):
         with self.assertRaises(HTTPException) as ctx:
             api.upload_screenplay_chunk(api.UploadChunkRequest(
-                upload_id="upload-g", chunk_index=0, total_chunks=1,
-                chunk_text="hi", project_id=999999,
+                upload_id="upload-g", chunk_text="hi", is_final=True, project_id=999999,
             ))
         self.assertEqual(ctx.exception.status_code, 404)
 
-    def test_inconsistent_total_chunks_mid_upload_is_409_upload_mismatch(self):
+    def test_inconsistent_project_id_mid_upload_is_409_upload_mismatch(self):
+        other_project = projects.create_project(
+            {"name": "Other", "description": "", "visual_style": "", "rules": ""}
+        )
         api.upload_screenplay_chunk(api.UploadChunkRequest(
-            upload_id="upload-h", chunk_index=0, total_chunks=3,
-            chunk_text="AAA", project_id=self.project["id"],
+            upload_id="upload-h", chunk_text="AAA", is_final=False,
+            project_id=self.project["id"],
         ))
         with self.assertRaises(HTTPException) as ctx:
             api.upload_screenplay_chunk(api.UploadChunkRequest(
-                upload_id="upload-h", chunk_index=1, total_chunks=5,
-                chunk_text="BBB", project_id=self.project["id"],
+                upload_id="upload-h", chunk_text="BBB", is_final=True,
+                project_id=other_project["id"],
             ))
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertEqual(ctx.exception.detail["code"], "upload_mismatch")
+
+    def test_duplicate_of_an_already_approved_screenplay_is_reported_via_chunks(self):
+        first = self._upload_in_chunks(_SIMPLE_V1, chunk_size=6, upload_id="upload-i")
+        api.approve_import_run(first["import_run_id"], api.ApproveRequest())
+
+        second = self._upload_in_chunks(_SIMPLE_V1, chunk_size=6, upload_id="upload-j")
+        self.assertEqual(second["duplicate_of_import_run_id"], first["import_run_id"])
 
 
 if __name__ == "__main__":
