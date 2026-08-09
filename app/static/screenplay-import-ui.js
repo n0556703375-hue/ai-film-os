@@ -25,42 +25,73 @@ async function apiCall(url, options = {}) {
   return parseApiResponse(response);
 }
 
-// Screenplays are uploaded in small chunks rather than one large POST — a
+// Screenplays are uploaded in small pieces rather than one large POST — a
 // network-level content filter observed in production (an Israeli ISP/
-// organizational filter, "Rimon") blocks large POST bodies to this same
-// endpoint with an HTML block page disguised as HTTP 200, while small
-// POSTs to the identical path go through untouched. Chunking is purely a
-// transport concern: the server only ever parses the fully reassembled
-// text in one call (app/services/chunked_screenplay_upload.py), so this
-// changes nothing about how the screenplay is understood.
-const UPLOAD_CHUNK_CHARS = 4000;
+// organizational filter, "Rimon") blocks POST bodies above some threshold
+// to this same endpoint with an HTML block page disguised as HTTP 200,
+// while small POSTs to the identical path go through untouched.
+// Production traffic showed both a ~7.4KB and a ~61KB request blocked —
+// there's no reliable fixed size to pick up front — so instead of
+// guessing one, this starts at a modest size and, whenever a piece gets
+// the same block signature, halves *that piece* and retries rather than
+// failing outright. Chunking is purely a transport concern: the server
+// only ever parses the fully reassembled text in one call
+// (app/services/chunked_screenplay_upload.py), so none of this changes
+// how the screenplay is understood.
+const UPLOAD_CHUNK_START_CHARS = 1000;
+const UPLOAD_CHUNK_MIN_CHARS = 80;
 
 function generateUploadId() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+// These are the FilmOsApiError codes safe_api.js throws when a response
+// isn't the JSON we expect — exactly the shape of a network filter's HTML
+// block page arriving with a 200 status. A real backend error uses its
+// own stable category codes (see app/api/screenplay_imports.py) and is
+// never one of these, so this check doesn't risk swallowing genuine
+// application errors.
+const NETWORK_FILTER_ERROR_CODES = new Set(["non_json_response", "empty_response", "malformed_json"]);
+
 async function uploadScreenplayInChunks(text, { projectId, sourceType, sourceFilename, importRunId, onProgress }) {
   const uploadId = generateUploadId();
-  const totalChunks = Math.max(1, Math.ceil(text.length / UPLOAD_CHUNK_CHARS));
+  const totalChars = text.length || 1;
+  let offset = 0;
+  let chunkSize = UPLOAD_CHUNK_START_CHARS;
   let result = null;
-  for (let index = 0; index < totalChunks; index++) {
-    const chunkText = text.slice(index * UPLOAD_CHUNK_CHARS, (index + 1) * UPLOAD_CHUNK_CHARS);
-    if (onProgress) onProgress(index + 1, totalChunks);
-    result = await apiCall("/api/screenplay-imports/upload-chunk", {
-      method: "POST",
-      body: JSON.stringify({
-        upload_id: uploadId,
-        chunk_index: index,
-        total_chunks: totalChunks,
-        chunk_text: chunkText,
-        project_id: projectId,
-        source_type: sourceType,
-        source_filename: sourceFilename,
-        import_run_id: importRunId || null,
-      }),
-    });
-  }
+
+  do {
+    const remaining = text.length - offset;
+    const size = Math.min(chunkSize, Math.max(remaining, 1));
+    const chunkText = text.slice(offset, offset + size);
+    const isFinal = offset + size >= text.length;
+
+    try {
+      result = await apiCall("/api/screenplay-imports/upload-chunk", {
+        method: "POST",
+        body: JSON.stringify({
+          upload_id: uploadId,
+          chunk_text: chunkText,
+          is_final: isFinal,
+          project_id: projectId,
+          source_type: sourceType,
+          source_filename: sourceFilename,
+          import_run_id: importRunId || null,
+        }),
+      });
+    } catch (error) {
+      if (NETWORK_FILTER_ERROR_CODES.has(error && error.code) && chunkSize > UPLOAD_CHUNK_MIN_CHARS) {
+        chunkSize = Math.max(UPLOAD_CHUNK_MIN_CHARS, Math.floor(chunkSize / 2));
+        continue; // retry the same offset at a smaller size
+      }
+      throw error;
+    }
+
+    offset += size;
+    if (onProgress) onProgress(offset, totalChars);
+  } while (offset < text.length);
+
   return result;
 }
 
@@ -190,20 +221,32 @@ async function onParseClicked() {
   localStorage.setItem("filmOsProjectId", String(state.projectId));
   state.pendingText = text;
   await withBusyButton("parseButton", async () => {
-    const run = await uploadScreenplayInChunks(text, {
+    const uploadResult = await uploadScreenplayInChunks(text, {
       projectId: state.projectId,
       sourceType: state.sourceType,
       sourceFilename: state.sourceFilename,
       onProgress: (done, total) => setBusyButtonProgress("parseButton", done, total),
     });
-    state.run = run;
-    state.errorMessage = null;
-    if (run.duplicate_of_import_run_id) {
-      state.phase = "duplicate";
-    } else {
-      state.phase = "preview";
-    }
+    await finalizeUploadResult(uploadResult, "preview");
   });
+}
+
+// The upload-chunk endpoint's final response is deliberately small (just
+// an id) rather than the full breakdown, since a large response can hit
+// the same network filter as a large request — so the full structured
+// preview is always fetched separately once the upload itself succeeded.
+async function finalizeUploadResult(uploadResult, phaseOnSuccess) {
+  state.errorMessage = null;
+  if (uploadResult.duplicate_of_import_run_id) {
+    state.run = {
+      id: uploadResult.import_run_id,
+      duplicate_of_import_run_id: uploadResult.duplicate_of_import_run_id,
+    };
+    state.phase = "duplicate";
+    return;
+  }
+  state.run = await apiCall(`/api/screenplay-imports/${uploadResult.import_run_id}`);
+  state.phase = phaseOnSuccess;
 }
 
 // --- Phase: duplicate (already-approved identical screenplay) --------------
@@ -272,18 +315,18 @@ async function onReparseClicked() {
     state.errorMessage = "יש להזין תסריט תקין.";
     return renderPreview();
   }
+  const reparsingRunId = state.run.id;
   await withBusyButton("reparseButton", async () => {
-    const run = await uploadScreenplayInChunks(text, {
+    const uploadResult = await uploadScreenplayInChunks(text, {
       projectId: state.projectId,
       sourceType: state.sourceType,
       sourceFilename: state.sourceFilename,
-      importRunId: state.run.id,
+      importRunId: reparsingRunId,
       onProgress: (done, total) => setBusyButtonProgress("reparseButton", done, total),
     });
-    state.run = run;
+    await finalizeUploadResult(uploadResult, "preview");
     state.editingText = false;
     state.pendingEditText = null;
-    state.errorMessage = null;
   });
 }
 
@@ -368,9 +411,11 @@ function renderDone() {
 
 // --- Shared plumbing ---------------------------------------------------------
 
-function setBusyButtonProgress(buttonId, done, total) {
+function setBusyButtonProgress(buttonId, doneChars, totalChars) {
   const button = $(buttonId);
-  if (button && total > 1) button.textContent = `מעלה מקטע ${done} מתוך ${total}...`;
+  if (!button || totalChars <= UPLOAD_CHUNK_START_CHARS) return;
+  const percent = Math.min(100, Math.round((doneChars / totalChars) * 100));
+  button.textContent = `מעלה... ${percent}%`;
 }
 
 async function withBusyButton(buttonId, action) {

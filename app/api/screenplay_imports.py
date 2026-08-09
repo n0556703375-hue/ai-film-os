@@ -5,6 +5,7 @@ This is deliberately a separate router/prefix from app/api/import_runs.py
 smoke-tested flow). This router is the new deterministic-parser flow:
 
   POST   /api/screenplay-imports                -> create a preview (no production writes)
+  POST   /api/screenplay-imports/upload-chunk    -> same, in small pieces (network-filter workaround)
   GET    /api/screenplay-imports?project_id=..   -> list a project's import runs
   GET    /api/screenplay-imports/{id}            -> fetch one run's full structured preview
   POST   /api/screenplay-imports/{id}/reparse    -> re-parse (optionally with edited text)
@@ -40,9 +41,8 @@ _CATEGORY_STATUS = {
     "duplicate_import": 409,
     "import_conflict": 409,
     "database_write_failed": 500,
-    "invalid_chunk_count": 409,
-    "invalid_chunk_index": 409,
     "chunk_too_large": 409,
+    "too_many_chunks": 409,
     "upload_mismatch": 409,
 }
 
@@ -57,9 +57,8 @@ _CATEGORY_MESSAGES = {
     "duplicate_import": "התסריט הזה כבר יובא ואושר בעבר בפרויקט.",
     "import_conflict": "הייבוא מתנגש עם נתוני הפקה קיימים ודורש אישור מפורש.",
     "database_write_failed": "שמירת הפירוק נכשלה עקב תקלה במסד הנתונים. ניתן לנסות שוב.",
-    "invalid_chunk_count": "מספר המקטעים בהעלאה אינו תקין.",
-    "invalid_chunk_index": "סדר המקטעים בהעלאה אינו תקין.",
     "chunk_too_large": "אחד ממקטעי ההעלאה גדול מדי.",
+    "too_many_chunks": "ההעלאה מכילה יותר מדי מקטעים.",
     "upload_mismatch": "ההעלאה המקוטעת אינה עקבית. יש להתחיל את הניתוח מחדש.",
 }
 
@@ -87,9 +86,8 @@ class ApproveRequest(BaseModel):
 
 class UploadChunkRequest(BaseModel):
     upload_id: str = Field(min_length=8, max_length=64)
-    chunk_index: int = Field(ge=0)
-    total_chunks: int = Field(ge=1, le=chunk_service.MAX_TOTAL_CHUNKS)
     chunk_text: str = Field(max_length=chunk_service.MAX_CHUNK_CHARS)
+    is_final: bool = False
     project_id: int = Field(ge=1)
     source_type: str = Field(default="paste", max_length=20)
     source_filename: str = Field(default="", max_length=255)
@@ -185,21 +183,24 @@ def create_import_run(request: CreateImportRunRequest):
 
 @router.post(
     "/upload-chunk",
-    summary="Upload one chunk of screenplay text (transport workaround for POST-size-limiting networks)",
+    summary="Upload one piece of screenplay text (transport workaround for POST-size-limiting networks)",
     description=(
         "Some networks (observed in production: an ISP/organizational "
         "content filter that returns an HTML block page with HTTP 200 for "
         "POST bodies above a certain size) reject the single-shot create/"
         "reparse endpoints for a full-length screenplay. This endpoint "
-        "accepts the same screenplay text split into small chunks — "
-        "identified by a client-generated `upload_id`, in order by "
-        "`chunk_index` — and only reassembles them server-side. No chunk "
-        "is parsed on its own; once the last chunk of `total_chunks` "
-        "arrives, the complete text is handed to the exact same "
+        "accepts the same screenplay text split into small pieces — "
+        "identified by a client-generated `upload_id`, appended in the "
+        "order they arrive — and only reassembles them server-side. No "
+        "piece is parsed on its own; once a request sets `is_final: true`, "
+        "the complete reassembled text is handed to the exact same "
         "deterministic create (or, if `import_run_id` is set, reparse) "
         "flow the single-shot endpoints use. Intermediate responses report "
-        "`completed: false`; the final response is the full run detail "
-        "(same shape as POST /api/screenplay-imports) with `completed: true`."
+        "`completed: false`. The final response is deliberately small "
+        "(just `import_run_id` and, if applicable, "
+        "`duplicate_of_import_run_id`) rather than the full run detail, "
+        "since the same network filter can also block on response size — "
+        "fetch the full preview separately via GET /api/screenplay-imports/{id}."
     ),
 )
 def upload_screenplay_chunk(request: UploadChunkRequest):
@@ -209,9 +210,8 @@ def upload_screenplay_chunk(request: UploadChunkRequest):
     try:
         result = chunk_service.receive_chunk(
             upload_id=request.upload_id,
-            chunk_index=request.chunk_index,
-            total_chunks=request.total_chunks,
             chunk_text=request.chunk_text,
+            is_final=request.is_final,
             project_id=request.project_id,
             import_run_id=request.import_run_id,
         )
@@ -237,8 +237,9 @@ def upload_screenplay_chunk(request: UploadChunkRequest):
     except import_service.ScreenplayImportError as exc:
         raise _error_response(exc.category) from exc
 
-    payload = _serialize_run_detail(run)
-    payload["completed"] = True
+    payload = {"completed": True, "import_run_id": run["id"]}
+    if run.get("duplicate_of_import_run_id"):
+        payload["duplicate_of_import_run_id"] = run["duplicate_of_import_run_id"]
     return payload
 
 

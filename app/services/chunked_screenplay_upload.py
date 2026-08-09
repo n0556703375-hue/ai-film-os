@@ -2,12 +2,19 @@
 
 Purely a transport-layer workaround: some networks (observed in production
 — an Israeli ISP/organizational content-filtering proxy, "Rimon", returning
-an HTML block page with HTTP 200) reject a POST body above some size
-threshold, but pass small POSTs to the same endpoint through untouched.
-Splitting the raw screenplay text into small chunks and reassembling them
-here sidesteps that without changing anything about how the screenplay is
-understood: a chunk is never parsed, validated, or interpreted on its own
-— app.services.screenplay_import_service only ever sees the complete,
+an HTML block page with HTTP 200 and a `Rimon: RWC_BLOCK` header) reject a
+POST body above some size threshold, but pass small POSTs to the same
+endpoint through untouched. The exact threshold isn't knowable up front —
+production traffic showed both a ~7.4KB request and a ~61KB request
+blocked, with only very small requests confirmed to pass — so the client
+(screenplay-import-ui.js) sends adaptively-sized pieces and shrinks on
+failure rather than assuming a fixed chunk size will always work.
+
+Chunks are appended here in arrival order (the client always awaits one
+chunk's response before sending the next, so no reordering is needed) and
+reassembled once the caller marks a chunk `is_final`. A chunk is never
+parsed, validated, or interpreted on its own —
+app.services.screenplay_import_service only ever sees the complete,
 reassembled source text, in one call, exactly as the single-shot endpoint
 already behaves. The two-stage import flow's guarantees are unchanged.
 
@@ -21,8 +28,9 @@ by a TTL instead of leaking memory forever.
 import time
 from dataclasses import dataclass, field
 
-MAX_CHUNK_CHARS = 8000
-MAX_TOTAL_CHUNKS = 3000  # guards against a lied-about total_chunks -> ~24MB cap
+MAX_CHUNK_CHARS = 20000  # generous abuse guard; the client's real working
+                          # size is far smaller and adapts to the network
+MAX_PARTS_PER_UPLOAD = 5000  # guards total memory for one upload
 UPLOAD_TTL_SECONDS = 30 * 60
 
 
@@ -34,10 +42,9 @@ class ChunkedUploadError(ValueError):
 
 @dataclass
 class _PendingUpload:
-    total_chunks: int
     project_id: int
     import_run_id: int | None
-    chunks: dict[int, str] = field(default_factory=dict)
+    parts: list[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.monotonic)
 
 
@@ -54,48 +61,38 @@ def _sweep_expired() -> None:
 def receive_chunk(
     *,
     upload_id: str,
-    chunk_index: int,
-    total_chunks: int,
     chunk_text: str,
+    is_final: bool,
     project_id: int,
     import_run_id: int | None,
 ) -> dict:
-    """Record one chunk. Returns either a progress dict or the fully
-    reassembled text once every chunk for this upload_id has arrived.
+    """Append one piece of screenplay text. Returns a small progress dict,
+    or — once `is_final` is True — the fully reassembled text.
     """
     _sweep_expired()
 
-    if total_chunks < 1 or total_chunks > MAX_TOTAL_CHUNKS:
-        raise ChunkedUploadError("invalid_chunk_count")
-    if chunk_index < 0 or chunk_index >= total_chunks:
-        raise ChunkedUploadError("invalid_chunk_index")
     if len(chunk_text) > MAX_CHUNK_CHARS:
         raise ChunkedUploadError("chunk_too_large")
 
     pending = _pending.get(upload_id)
     if pending is None:
-        pending = _PendingUpload(
-            total_chunks=total_chunks, project_id=project_id, import_run_id=import_run_id,
-        )
+        pending = _PendingUpload(project_id=project_id, import_run_id=import_run_id)
         _pending[upload_id] = pending
 
-    if (
-        pending.total_chunks != total_chunks
-        or pending.project_id != project_id
-        or pending.import_run_id != import_run_id
-    ):
+    if pending.project_id != project_id or pending.import_run_id != import_run_id:
         raise ChunkedUploadError("upload_mismatch")
+    if len(pending.parts) >= MAX_PARTS_PER_UPLOAD:
+        raise ChunkedUploadError("too_many_chunks")
 
-    pending.chunks[chunk_index] = chunk_text
+    pending.parts.append(chunk_text)
 
-    if len(pending.chunks) < pending.total_chunks:
+    if not is_final:
         return {
             "completed": False,
             "upload_id": upload_id,
-            "received_chunks": len(pending.chunks),
-            "total_chunks": pending.total_chunks,
+            "received_chars": sum(len(part) for part in pending.parts),
         }
 
-    full_text = "".join(pending.chunks[i] for i in range(pending.total_chunks))
+    full_text = "".join(pending.parts)
     _pending.pop(upload_id, None)
     return {"completed": True, "screenplay_text": full_text}
