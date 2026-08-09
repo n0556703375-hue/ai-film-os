@@ -25,6 +25,45 @@ async function apiCall(url, options = {}) {
   return parseApiResponse(response);
 }
 
+// Screenplays are uploaded in small chunks rather than one large POST — a
+// network-level content filter observed in production (an Israeli ISP/
+// organizational filter, "Rimon") blocks large POST bodies to this same
+// endpoint with an HTML block page disguised as HTTP 200, while small
+// POSTs to the identical path go through untouched. Chunking is purely a
+// transport concern: the server only ever parses the fully reassembled
+// text in one call (app/services/chunked_screenplay_upload.py), so this
+// changes nothing about how the screenplay is understood.
+const UPLOAD_CHUNK_CHARS = 4000;
+
+function generateUploadId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+async function uploadScreenplayInChunks(text, { projectId, sourceType, sourceFilename, importRunId, onProgress }) {
+  const uploadId = generateUploadId();
+  const totalChunks = Math.max(1, Math.ceil(text.length / UPLOAD_CHUNK_CHARS));
+  let result = null;
+  for (let index = 0; index < totalChunks; index++) {
+    const chunkText = text.slice(index * UPLOAD_CHUNK_CHARS, (index + 1) * UPLOAD_CHUNK_CHARS);
+    if (onProgress) onProgress(index + 1, totalChunks);
+    result = await apiCall("/api/screenplay-imports/upload-chunk", {
+      method: "POST",
+      body: JSON.stringify({
+        upload_id: uploadId,
+        chunk_index: index,
+        total_chunks: totalChunks,
+        chunk_text: chunkText,
+        project_id: projectId,
+        source_type: sourceType,
+        source_filename: sourceFilename,
+        import_run_id: importRunId || null,
+      }),
+    });
+  }
+  return result;
+}
+
 const state = {
   phase: "input", // input -> preview -> diff -> done
   projectId: null,
@@ -151,14 +190,11 @@ async function onParseClicked() {
   localStorage.setItem("filmOsProjectId", String(state.projectId));
   state.pendingText = text;
   await withBusyButton("parseButton", async () => {
-    const run = await apiCall("/api/screenplay-imports", {
-      method: "POST",
-      body: JSON.stringify({
-        project_id: state.projectId,
-        screenplay_text: text,
-        source_type: state.sourceType,
-        source_filename: state.sourceFilename,
-      }),
+    const run = await uploadScreenplayInChunks(text, {
+      projectId: state.projectId,
+      sourceType: state.sourceType,
+      sourceFilename: state.sourceFilename,
+      onProgress: (done, total) => setBusyButtonProgress("parseButton", done, total),
     });
     state.run = run;
     state.errorMessage = null;
@@ -237,9 +273,12 @@ async function onReparseClicked() {
     return renderPreview();
   }
   await withBusyButton("reparseButton", async () => {
-    const run = await apiCall(`/api/screenplay-imports/${state.run.id}/reparse`, {
-      method: "POST",
-      body: JSON.stringify({ screenplay_text: text }),
+    const run = await uploadScreenplayInChunks(text, {
+      projectId: state.projectId,
+      sourceType: state.sourceType,
+      sourceFilename: state.sourceFilename,
+      importRunId: state.run.id,
+      onProgress: (done, total) => setBusyButtonProgress("reparseButton", done, total),
     });
     state.run = run;
     state.editingText = false;
@@ -328,6 +367,11 @@ function renderDone() {
 }
 
 // --- Shared plumbing ---------------------------------------------------------
+
+function setBusyButtonProgress(buttonId, done, total) {
+  const button = $(buttonId);
+  if (button && total > 1) button.textContent = `מעלה מקטע ${done} מתוך ${total}...`;
+}
 
 async function withBusyButton(buttonId, action) {
   const button = $(buttonId);

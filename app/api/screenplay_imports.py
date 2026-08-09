@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from app.repositories import import_runs as import_runs_repo
 from app.repositories import projects as project_repo
+from app.services import chunked_screenplay_upload as chunk_service
 from app.services import screenplay_import_service as import_service
 
 router = APIRouter(prefix="/api/screenplay-imports", tags=["screenplay-imports"])
@@ -39,6 +40,10 @@ _CATEGORY_STATUS = {
     "duplicate_import": 409,
     "import_conflict": 409,
     "database_write_failed": 500,
+    "invalid_chunk_count": 409,
+    "invalid_chunk_index": 409,
+    "chunk_too_large": 409,
+    "upload_mismatch": 409,
 }
 
 _CATEGORY_MESSAGES = {
@@ -52,6 +57,10 @@ _CATEGORY_MESSAGES = {
     "duplicate_import": "התסריט הזה כבר יובא ואושר בעבר בפרויקט.",
     "import_conflict": "הייבוא מתנגש עם נתוני הפקה קיימים ודורש אישור מפורש.",
     "database_write_failed": "שמירת הפירוק נכשלה עקב תקלה במסד הנתונים. ניתן לנסות שוב.",
+    "invalid_chunk_count": "מספר המקטעים בהעלאה אינו תקין.",
+    "invalid_chunk_index": "סדר המקטעים בהעלאה אינו תקין.",
+    "chunk_too_large": "אחד ממקטעי ההעלאה גדול מדי.",
+    "upload_mismatch": "ההעלאה המקוטעת אינה עקבית. יש להתחיל את הניתוח מחדש.",
 }
 
 
@@ -74,6 +83,17 @@ class ReparseRequest(BaseModel):
 
 class ApproveRequest(BaseModel):
     confirm: bool = False
+
+
+class UploadChunkRequest(BaseModel):
+    upload_id: str = Field(min_length=8, max_length=64)
+    chunk_index: int = Field(ge=0)
+    total_chunks: int = Field(ge=1, le=chunk_service.MAX_TOTAL_CHUNKS)
+    chunk_text: str = Field(max_length=chunk_service.MAX_CHUNK_CHARS)
+    project_id: int = Field(ge=1)
+    source_type: str = Field(default="paste", max_length=20)
+    source_filename: str = Field(default="", max_length=255)
+    import_run_id: int | None = Field(default=None, ge=1)
 
 
 def _serialize_run_detail(run: dict) -> dict:
@@ -161,6 +181,65 @@ def create_import_run(request: CreateImportRunRequest):
     except import_service.ScreenplayImportError as exc:
         raise _error_response(exc.category) from exc
     return _serialize_run_detail(run)
+
+
+@router.post(
+    "/upload-chunk",
+    summary="Upload one chunk of screenplay text (transport workaround for POST-size-limiting networks)",
+    description=(
+        "Some networks (observed in production: an ISP/organizational "
+        "content filter that returns an HTML block page with HTTP 200 for "
+        "POST bodies above a certain size) reject the single-shot create/"
+        "reparse endpoints for a full-length screenplay. This endpoint "
+        "accepts the same screenplay text split into small chunks — "
+        "identified by a client-generated `upload_id`, in order by "
+        "`chunk_index` — and only reassembles them server-side. No chunk "
+        "is parsed on its own; once the last chunk of `total_chunks` "
+        "arrives, the complete text is handed to the exact same "
+        "deterministic create (or, if `import_run_id` is set, reparse) "
+        "flow the single-shot endpoints use. Intermediate responses report "
+        "`completed: false`; the final response is the full run detail "
+        "(same shape as POST /api/screenplay-imports) with `completed: true`."
+    ),
+)
+def upload_screenplay_chunk(request: UploadChunkRequest):
+    if not project_repo.get_project(request.project_id):
+        raise HTTPException(404, "הפרויקט לא נמצא.")
+
+    try:
+        result = chunk_service.receive_chunk(
+            upload_id=request.upload_id,
+            chunk_index=request.chunk_index,
+            total_chunks=request.total_chunks,
+            chunk_text=request.chunk_text,
+            project_id=request.project_id,
+            import_run_id=request.import_run_id,
+        )
+    except chunk_service.ChunkedUploadError as exc:
+        raise _error_response(exc.category) from exc
+
+    if not result["completed"]:
+        return result
+
+    full_text = result["screenplay_text"]
+    try:
+        if request.import_run_id:
+            run = import_service.reparse_import_run(request.import_run_id, full_text)
+        else:
+            run = import_service.create_import_run(
+                request.project_id, full_text,
+                source_type=request.source_type, source_filename=request.source_filename,
+            )
+    except import_service.ImportRunNotFound as exc:
+        raise HTTPException(404, "ריצת הייבוא לא נמצאה.") from exc
+    except import_service.ImportRunNotEditable as exc:
+        raise HTTPException(409, "ריצת הייבוא כבר אושרה ולא ניתן לערוך אותה.") from exc
+    except import_service.ScreenplayImportError as exc:
+        raise _error_response(exc.category) from exc
+
+    payload = _serialize_run_detail(run)
+    payload["completed"] = True
+    return payload
 
 
 @router.get("", summary="List a project's import runs, most recent first")
