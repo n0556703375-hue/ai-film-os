@@ -215,33 +215,38 @@ def _is_page_break_artifact(line: str) -> bool:
     return False
 
 
-_WRAPPED_LEADING_PERIOD_RE = re.compile(r"^\.(?=[A-Za-z֐-׿])")
+_WRAPPED_LEADING_MARK_RE = re.compile(r"^([.:])(?=[A-Za-z֐-׿])")
 
 
 def _reattach_wrapped_leading_punctuation(lines: list[str]) -> list[str]:
-    """Undo a common RTL copy-paste artifact: a sentence-ending period
-    that lands on the *start* of the next visual line instead of the end
-    of the one it belongs to — a source page rendering as
-    "...רגע\n.דבורה:\n..." instead of "...רגע.\nדבורה:\n...". Left alone,
-    this breaks the previous line's own end-of-sentence punctuation check
-    *and* glues a stray leading period onto the next line's cue name,
-    which can fragment one real speaker into two entities and mis-cue an
-    action line as a low-confidence character. Only triggers when the
-    period is immediately followed by a letter (no space) — a genuine
-    list marker like ". " or ".1" is left untouched, and only when the
-    immediately preceding line is non-blank and not already terminated.
+    """Undo a common RTL copy-paste artifact: a period or colon that
+    belongs at the *end* of one visual line instead lands on the *start*
+    of the next — a source page rendering as "...רגע\n.דבורה:\n..."
+    instead of "...רגע.\nדבורה:\n...", or "...הודעה\n:תשע שעות...\n..."
+    instead of "...הודעה:\nתשע שעות...\n...". Left alone, either breaks
+    the previous line's own end-of-sentence/lead-in punctuation check
+    *and* glues a stray leading mark onto the next line's cue name —
+    fragmenting one real speaker into two entities (period case) or
+    turning a long narration line into a fake short cue by stranding its
+    colon on the wrong side of the line break (colon case). Only
+    triggers when the mark is immediately followed by a letter (no
+    space) — a genuine list marker like ". " or ".1" is left untouched —
+    and only when the immediately preceding line is non-blank and not
+    already terminated.
     """
     fixed = list(lines)
     for index, line in enumerate(fixed):
-        if not _WRAPPED_LEADING_PERIOD_RE.match(line):
+        match = _WRAPPED_LEADING_MARK_RE.match(line)
+        if not match:
             continue
+        mark = match.group(1)
         previous_index = index - 1
         if previous_index < 0:
             continue
         previous_line = fixed[previous_index]
         if not previous_line or re.search(r"[.!?:]$", previous_line):
             continue
-        fixed[previous_index] = previous_line + "."
+        fixed[previous_index] = previous_line + mark
         fixed[index] = line[1:]
     return fixed
 
@@ -351,20 +356,41 @@ def _strip_cue_annotation(text: str) -> tuple[str, str]:
 # lead-in, not a cue.
 MAX_HEBREW_CUE_WORDS = 2
 _HEBREW_CUE_DISQUALIFYING_FIRST_WORDS = {
-    "על", "אל", "מול", "ליד", "אצל", "עם", "בתוך", "מתחת", "מעל",
+    "על", "אל", "מול", "ליד", "אצל", "עם", "בתוך", "מתחת", "מתחתיה", "מעל",
     "אחרי", "לפני", "היא", "הוא", "הם", "הן", "כש", "אם", "כי",
-    "אבל", "אז", "גם", "רק", "כל",
+    "אבל", "אז", "גם", "רק", "כל", "בסוף", "אזהרה", "ספירה", "הספירה",
+    "מתחתיו",
+    # A scene/act heading fragmented across a mid-word PDF line-wrap
+    # ("סצנה י״ז — הדרך לארכיו" / "ן..." on the next line, or "חלק ד׳ —
+    # ...") leaves the heading fragment unmatched by _match_heading;
+    # without this, the leftover text reads as a short standalone line
+    # and gets guessed as a cue. A character is never literally named
+    # "Scene" or "Part".
+    "סצנה", "חלק",
+    # "the screen" / "the screen shows" as its own line or short phrase —
+    # a display surface is never a speaking character's name.
+    "המסך", "מסך",
+    # Generic system/output labels that lead in to displayed or read-aloud
+    # text ("Result:", "Options:", "List of names:", "Typing:", "In the
+    # transit center:") — the same lead-in pattern as "the screen:", just
+    # with a different label noun. Never a speaking character's name.
+    "תוצאה", "אפשרויות", "רשימת", "מקלידה", "במרכז",
 }
 _DIGIT_RE = re.compile(r"\d")
 
 
-def _looks_like_hebrew_cue_colon_line(name: str) -> bool:
+def _has_digit_or_disqualifying_first_word(name: str) -> bool:
     if _DIGIT_RE.search(name):
-        return False
+        return True
+    words = name.split()
+    return bool(words) and words[0] in _HEBREW_CUE_DISQUALIFYING_FIRST_WORDS
+
+
+def _looks_like_hebrew_cue_colon_line(name: str) -> bool:
     words = name.split()
     if not words or len(words) > MAX_HEBREW_CUE_WORDS:
         return False
-    return words[0] not in _HEBREW_CUE_DISQUALIFYING_FIRST_WORDS
+    return not _has_digit_or_disqualifying_first_word(name)
 
 
 def _looks_like_character_cue(line: str, has_more_content: bool) -> tuple[bool, str]:
@@ -410,8 +436,11 @@ def _looks_like_character_cue(line: str, has_more_content: bool) -> tuple[bool, 
             return False, ""
         # No case distinction in Hebrew and no colon convention used — a
         # short standalone line ahead of more text is a plausible cue, but
-        # this is a real guess, not a confirmed structural signal.
-        if len(name) <= 25 and not re.search(r"[.!?]$", name):
+        # this is a real guess, not a confirmed structural signal. Still
+        # never guessed at all when it opens with the same disqualifying
+        # words as the colon case (e.g. a fragmented "סצנה ..." heading
+        # left behind by a mid-word PDF line-wrap).
+        if len(name) <= 25 and not re.search(r"[.!?]$", name) and not _has_digit_or_disqualifying_first_word(name):
             return True, "low"
         return False, ""
 
@@ -476,7 +505,22 @@ def _classify_lines(lines: list[str]) -> list[ContentBlock]:
 
             dialogue_lines: list[str] = []
             while index < n and lines[index]:
-                dialogue_lines.append(lines[index])
+                candidate = lines[index]
+                # Stop collecting as soon as the next line is itself a new
+                # structural boundary (cue, transition, heading) — real
+                # screenplay text pasted from some PDF exports has no blank
+                # line between one speaker's line and the next speaker's
+                # cue, and without this check the whole exchange gets
+                # silently swallowed into the first speaker's dialogue,
+                # misattributing every line after it.
+                if _match_heading(candidate) or _looks_like_transition(candidate):
+                    break
+                candidate_is_cue, _candidate_confidence = _looks_like_character_cue(
+                    candidate, _has_more_content(lines, index + 1)
+                )
+                if candidate_is_cue:
+                    break
+                dialogue_lines.append(candidate)
                 index += 1
 
             if dialogue_lines:

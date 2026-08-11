@@ -268,6 +268,77 @@ class DialogueVsActionTests(unittest.TestCase):
         self.assertEqual(names, ["קול האטלס"])
         self.assertEqual(result.scenes[0].blocks[0].confidence, "high")
 
+    def test_colon_wrapped_onto_start_of_next_line_is_reattached(self):
+        # Same RTL copy-paste artifact as the period case above, but with a
+        # colon: a narration lead-in's trailing colon lands on the *next*
+        # visual line instead of the end of the line it belongs to. Found
+        # in a real production screenplay ("...הודעה\n:תשע שעות...").
+        # Left unhandled, the announcement text is left carrying a stray
+        # leading colon.
+        text = (
+            "1. פנים. רחוב - יום\n\n"
+            "על מסך עירוני קטן מעל הרובע מופיעה אותה הודעה\n"
+            ":תשע שעות להפעלת הציר הלבן.\n\n"
+            "דבורה:\n"
+            "מה קורה?\n"
+        )
+        result = parse_screenplay(text)
+        names = [c.canonical_name for c in result.characters]
+        self.assertEqual(names, ["דבורה"])
+        action_lines = [b.raw_text for b in result.scenes[0].blocks if b.block_type == "action"]
+        self.assertTrue(all(not line.startswith(":") for line in action_lines))
+        self.assertTrue(any(line.endswith("הודעה:\nתשע שעות להפעלת הציר הלבן.") for line in action_lines))
+
+    def test_digit_fused_short_line_without_colon_is_not_guessed_as_a_cue(self):
+        # A page-number/timestamp fused directly onto text by a PDF export
+        # ("5תמר") is never a real character name, whether or not the line
+        # ends in a colon.
+        text = "1. INT. ROOM - DAY\n\n5תמר\nהיא נכנסת.\n\nדני:\nהיי.\n"
+        result = parse_screenplay(text)
+        names = [c.canonical_name for c in result.characters]
+        self.assertEqual(names, ["דני"])
+
+    def test_generic_system_and_location_label_colon_lines_are_not_guessed_as_cues(self):
+        # Generic labels that lead in to displayed/read text ("Result:",
+        # "Options:", "List of names:", "Typing:", "In the transit
+        # center:") — never a speaking character's name.
+        for label in ["תוצאה", "אפשרויות", "רשימת שמות", "מקלידה", "במרכז התחבורה"]:
+            with self.subTest(label=label):
+                text = (
+                    "1. INT. ROOM - DAY\n\n"
+                    f"{label}:\n"
+                    "פרטים מוצגים כאן.\n\n"
+                    "דני:\n"
+                    "טוב.\n"
+                )
+                result = parse_screenplay(text)
+                names = [c.canonical_name for c in result.characters]
+                self.assertEqual(names, ["דני"])
+
+    def test_scene_and_screen_heading_fragments_are_not_guessed_as_cues(self):
+        # A scene/act heading or "the screen" fragmented across a mid-word
+        # PDF line-wrap must never be guessed as a character's name.
+        for fragment in ["סצנה", "חלק", "מסך"]:
+            with self.subTest(fragment=fragment):
+                text = f"1. INT. ROOM - DAY\n\n{fragment}\nהמשך הפעולה.\n\nדני:\nהיי.\n"
+                result = parse_screenplay(text)
+                names = [c.canonical_name for c in result.characters]
+                self.assertEqual(names, ["דני"])
+
+    def test_new_speaker_cue_ends_previous_dialogue_block_even_without_a_blank_line(self):
+        # Real-world pasted screenplays often lack a blank line between
+        # consecutive speaker exchanges. Without a boundary check, the
+        # dialogue-collection loop swallowed the next speaker's cue and
+        # lines as literal text into the first speaker's block, badly
+        # misattributing dialogue across the whole document.
+        text = "1. פנים. חדר - יום\n\nיוכבד:\nבואי הנה.\nליאורה:\nאני באה.\n"
+        result = parse_screenplay(text)
+        blocks = result.scenes[0].blocks
+        self.assertEqual([b.block_type for b in blocks], ["dialogue", "dialogue"])
+        self.assertEqual([b.character_name for b in blocks], ["יוכבד", "ליאורה"])
+        self.assertEqual(blocks[0].raw_text, "בואי הנה.")
+        self.assertEqual(blocks[1].raw_text, "אני באה.")
+
     def test_block_order_is_preserved_within_a_scene(self):
         text = (
             "1. INT. ROOM - DAY\n\n"
