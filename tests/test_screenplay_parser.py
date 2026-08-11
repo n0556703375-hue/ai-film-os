@@ -211,6 +211,63 @@ class DialogueVsActionTests(unittest.TestCase):
         categories = [w.category for w in result.warnings]
         self.assertIn("low_confidence_classification", categories)
 
+    def test_hebrew_action_lead_in_ending_in_colon_is_not_a_fabricated_cue(self):
+        # "על המסך:" ("on the screen:") introduces a displayed message —
+        # a common Hebrew screenwriting convention — not a speaker. Found
+        # via a real production screenplay where this pattern inflated the
+        # character count from ~13 real speakers to 56 entities.
+        text = (
+            "1. INT. ROOM - DAY\n\n"
+            "היא בודקת את המסך.\n"
+            "על המסך:\n"
+            "אזעקה פעילה.\n\n"
+            "דבורה:\n"
+            "מה קורה?\n"
+        )
+        result = parse_screenplay(text)
+        names = [c.canonical_name for c in result.characters]
+        self.assertEqual(names, ["דבורה"])
+        action_text = " ".join(
+            b.raw_text for b in result.scenes[0].blocks if b.block_type == "action"
+        )
+        self.assertIn("אזעקה פעילה", action_text)
+
+    def test_long_hebrew_sentence_ending_in_colon_is_not_a_cue(self):
+        text = (
+            "1. INT. ROOM - DAY\n\n"
+            "היא פותחת שלוש שכבות:\n"
+            "האחת ריקה.\n\n"
+            "דני:\n"
+            "בוא הנה.\n"
+        )
+        result = parse_screenplay(text)
+        names = [c.canonical_name for c in result.characters]
+        self.assertEqual(names, ["דני"])
+
+    def test_digit_containing_colon_line_is_not_a_cue(self):
+        # A page number or timestamp fused onto adjacent text by a PDF
+        # export ("00:09דבורה:") is never a real character name.
+        text = (
+            "1. INT. ROOM - DAY\n\n"
+            "00:09תוצאה:\n"
+            "בדיקה הושלמה.\n\n"
+            "רותם:\n"
+            "טוב.\n"
+        )
+        result = parse_screenplay(text)
+        names = [c.canonical_name for c in result.characters]
+        self.assertEqual(names, ["רותם"])
+
+    def test_short_two_word_hebrew_role_cue_still_recognized(self):
+        # "קול האטלס:" ("Voice of the Atlas:") is a legitimate short
+        # descriptive speaker role, not a narration lead-in — the fix for
+        # the above cases must not start rejecting real short cues.
+        text = "1. INT. ROOM - DAY\n\nקול האטלס:\nהודעה לכולם.\n"
+        result = parse_screenplay(text)
+        names = [c.canonical_name for c in result.characters]
+        self.assertEqual(names, ["קול האטלס"])
+        self.assertEqual(result.scenes[0].blocks[0].confidence, "high")
+
     def test_block_order_is_preserved_within_a_scene(self):
         text = (
             "1. INT. ROOM - DAY\n\n"
@@ -307,6 +364,28 @@ class MalformedButRecoverableTests(unittest.TestCase):
         text = "INT: GARAGE - NIGHT\n\nA motorcycle under a tarp.\n"
         result = parse_screenplay(text)
         self.assertEqual(result.scenes[0].location, "GARAGE")
+
+    def test_period_wrapped_onto_start_of_next_line_does_not_split_a_cue(self):
+        # A common RTL copy-paste-from-PDF artifact: a sentence-ending
+        # period lands on the *next* visual line instead of the end of
+        # the one it belongs to — "...רגע\n.דבורה:\n..." instead of
+        # "...רגע.\nדבורה:\n...". Left unhandled this both breaks the
+        # previous action line's own punctuation and creates ".דבורה" as
+        # a second, spurious character distinct from every clean "דבורה"
+        # cue elsewhere in the document.
+        text = (
+            "1. INT. ROOM - DAY\n\n"
+            "דבורה שותקת רגע\n"
+            ".דבורה:\n"
+            "תסמני לבדיקה.\n\n"
+            "2. INT. ROOM - NIGHT\n\n"
+            "דבורה:\n"
+            "עוד פעם.\n"
+        )
+        result = parse_screenplay(text)
+        names = [c.canonical_name for c in result.characters]
+        self.assertEqual(names, ["דבורה"])
+        self.assertEqual(result.characters[0].first_appearance_scene_number, 1)
 
 
 class ReimportSameScreenplayTests(unittest.TestCase):
