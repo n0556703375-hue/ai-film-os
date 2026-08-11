@@ -73,13 +73,24 @@ def create_import_run(
     *,
     source_type: str = "paste",
     source_filename: str = "",
+    force: bool = False,
 ) -> dict:
-    """Parse a screenplay and store the preview server-side. No production writes."""
+    """Parse a screenplay and store the preview server-side. No production writes.
+
+    Idempotency (identical text to an already-approved run short-circuits
+    without re-parsing) is skipped when ``force`` is True. This is the
+    escape hatch for the one case idempotency-by-hash can't distinguish
+    on its own: the *parser* changed since the text was approved, and the
+    caller explicitly wants a fresh preview to see the new result — not
+    a second accidental submission of the same text, which is what the
+    hash check exists to catch.
+    """
     source_hash = _hash_text(screenplay_text)
 
-    existing_approved = import_runs_repo.find_approved_run_by_hash(project_id, source_hash)
-    if existing_approved:
-        return {**existing_approved, "duplicate_of_import_run_id": existing_approved["id"]}
+    if not force:
+        existing_approved = import_runs_repo.find_approved_run_by_hash(project_id, source_hash)
+        if existing_approved:
+            return {**existing_approved, "duplicate_of_import_run_id": existing_approved["id"]}
 
     try:
         parsed = parse_screenplay(screenplay_text)

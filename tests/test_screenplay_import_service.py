@@ -69,6 +69,21 @@ class CreateImportRunTests(ScreenplayImportServiceTestCase):
         self.assertNotIn("duplicate_of_import_run_id", second)
         self.assertNotEqual(first["id"], second["id"])
 
+    def test_force_bypasses_the_duplicate_shortcut_for_already_approved_text(self):
+        # The escape hatch for re-checking already-approved text against a
+        # newer parser version: without force, identical text to an
+        # approved run always short-circuits (previous test); force skips
+        # that and produces a real fresh preview instead.
+        first = svc.create_import_run(self.project["id"], _SIMPLE_V1)
+        svc.approve_import_run(first["id"])
+
+        forced = svc.create_import_run(self.project["id"], _SIMPLE_V1, force=True)
+
+        self.assertNotIn("duplicate_of_import_run_id", forced)
+        self.assertNotEqual(forced["id"], first["id"])
+        self.assertEqual(forced["status"], "review_required")
+        self.assertEqual(len(import_runs_repo.list_import_runs(self.project["id"])), 2)
+
 
 class ReparseTests(ScreenplayImportServiceTestCase):
     def test_reparse_updates_the_same_run_in_place(self):

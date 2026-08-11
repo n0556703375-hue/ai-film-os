@@ -76,6 +76,26 @@ class CreateImportRunApiTests(ScreenplayImportsApiTestCase):
         self.assertEqual(ctx.exception.detail["code"], "empty_script")
         self.assertNotIn("Traceback", ctx.exception.detail["message"])
 
+    def test_force_bypasses_duplicate_shortcut_for_already_approved_text(self):
+        first = api.create_import_run(
+            api.CreateImportRunRequest(project_id=self.project["id"], screenplay_text=_SIMPLE_V1)
+        )
+        api.approve_import_run(first["id"], api.ApproveRequest())
+
+        without_force = api.create_import_run(
+            api.CreateImportRunRequest(project_id=self.project["id"], screenplay_text=_SIMPLE_V1)
+        )
+        self.assertEqual(without_force["duplicate_of_import_run_id"], first["id"])
+
+        forced = api.create_import_run(
+            api.CreateImportRunRequest(
+                project_id=self.project["id"], screenplay_text=_SIMPLE_V1, force=True,
+            )
+        )
+        self.assertIsNone(forced.get("duplicate_of_import_run_id"))
+        self.assertNotEqual(forced["id"], first["id"])
+        self.assertEqual(forced["status"], "review_required")
+
 
 class GetAndListImportRunApiTests(ScreenplayImportsApiTestCase):
     def test_get_unknown_run_is_404(self):
@@ -208,13 +228,13 @@ class UploadChunkApiTests(ScreenplayImportsApiTestCase):
     request) — callers fetch the full breakdown with a separate GET.
     """
 
-    def _upload_in_chunks(self, text, chunk_size, *, upload_id="test-upload", import_run_id=None):
+    def _upload_in_chunks(self, text, chunk_size, *, upload_id="test-upload", import_run_id=None, force=False):
         pieces = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)] or [""]
         result = None
         for index, chunk_text in enumerate(pieces):
             result = api.upload_screenplay_chunk(api.UploadChunkRequest(
                 upload_id=upload_id, chunk_text=chunk_text, is_final=(index == len(pieces) - 1),
-                project_id=self.project["id"], import_run_id=import_run_id,
+                project_id=self.project["id"], import_run_id=import_run_id, force=force,
             ))
         return result
 
@@ -291,6 +311,16 @@ class UploadChunkApiTests(ScreenplayImportsApiTestCase):
 
         second = self._upload_in_chunks(_SIMPLE_V1, chunk_size=6, upload_id="upload-j")
         self.assertEqual(second["duplicate_of_import_run_id"], first["import_run_id"])
+
+    def test_force_bypasses_duplicate_shortcut_via_chunks(self):
+        first = self._upload_in_chunks(_SIMPLE_V1, chunk_size=6, upload_id="upload-k")
+        api.approve_import_run(first["import_run_id"], api.ApproveRequest())
+
+        forced = self._upload_in_chunks(
+            _SIMPLE_V1, chunk_size=6, upload_id="upload-l", force=True,
+        )
+        self.assertIsNone(forced.get("duplicate_of_import_run_id"))
+        self.assertNotEqual(forced["import_run_id"], first["import_run_id"])
 
 
 if __name__ == "__main__":
