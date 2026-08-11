@@ -74,6 +74,7 @@ class CreateImportRunRequest(BaseModel):
     screenplay_text: str = Field(min_length=1, max_length=1_000_000)
     source_type: str = Field(default="paste", max_length=20)
     source_filename: str = Field(default="", max_length=255)
+    force: bool = False
 
 
 class ReparseRequest(BaseModel):
@@ -92,6 +93,7 @@ class UploadChunkRequest(BaseModel):
     source_type: str = Field(default="paste", max_length=20)
     source_filename: str = Field(default="", max_length=255)
     import_run_id: int | None = Field(default=None, ge=1)
+    force: bool = False
 
 
 def _serialize_run_detail(run: dict) -> dict:
@@ -163,7 +165,9 @@ def _serialize_diff(diff: dict) -> dict:
         "review_required import run — it never touches scenes/shots/etc. "
         "If a screenplay with the exact same text was already approved for "
         "this project, that approved run is returned unchanged instead "
-        "(idempotent — see `duplicate_of_import_run_id`)."
+        "(idempotent — see `duplicate_of_import_run_id`), unless `force` is "
+        "true, which always re-parses — the escape hatch for re-checking "
+        "already-approved text against a newer parser version."
     ),
 )
 def create_import_run(request: CreateImportRunRequest):
@@ -175,6 +179,7 @@ def create_import_run(request: CreateImportRunRequest):
             request.screenplay_text,
             source_type=request.source_type,
             source_filename=request.source_filename,
+            force=request.force,
         )
     except import_service.ScreenplayImportError as exc:
         raise _error_response(exc.category) from exc
@@ -229,6 +234,7 @@ def upload_screenplay_chunk(request: UploadChunkRequest):
             run = import_service.create_import_run(
                 request.project_id, full_text,
                 source_type=request.source_type, source_filename=request.source_filename,
+                force=request.force,
             )
     except import_service.ImportRunNotFound as exc:
         raise HTTPException(404, "ריצת הייבוא לא נמצאה.") from exc

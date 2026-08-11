@@ -54,7 +54,7 @@ function generateUploadId() {
 // application errors.
 const NETWORK_FILTER_ERROR_CODES = new Set(["non_json_response", "empty_response", "malformed_json"]);
 
-async function uploadScreenplayInChunks(text, { projectId, sourceType, sourceFilename, importRunId, onProgress }) {
+async function uploadScreenplayInChunks(text, { projectId, sourceType, sourceFilename, importRunId, force, onProgress }) {
   const uploadId = generateUploadId();
   const totalChars = text.length || 1;
   let offset = 0;
@@ -78,6 +78,7 @@ async function uploadScreenplayInChunks(text, { projectId, sourceType, sourceFil
           source_type: sourceType,
           source_filename: sourceFilename,
           import_run_id: importRunId || null,
+          force: Boolean(force),
         }),
       });
     } catch (error) {
@@ -220,12 +221,20 @@ async function onParseClicked() {
   state.projectId = Number($("project").value);
   localStorage.setItem("filmOsProjectId", String(state.projectId));
   state.pendingText = text;
-  await withBusyButton("parseButton", async () => {
+  await runParse(text, { buttonId: "parseButton", force: false });
+}
+
+// Shared by the initial parse and by "re-analyze anyway" on the duplicate
+// screen (force: true) — same upload, same finalize, only the duplicate-
+// shortcut behavior differs.
+async function runParse(text, { buttonId, force }) {
+  await withBusyButton(buttonId, async () => {
     const uploadResult = await uploadScreenplayInChunks(text, {
       projectId: state.projectId,
       sourceType: state.sourceType,
       sourceFilename: state.sourceFilename,
-      onProgress: (done, total) => setBusyButtonProgress("parseButton", done, total),
+      force,
+      onProgress: (done, total) => setBusyButtonProgress(buttonId, done, total),
     });
     await finalizeUploadResult(uploadResult, "preview");
   });
@@ -256,11 +265,16 @@ function renderDuplicate() {
     <div class="workspace-section">
       <h3>התסריט הזה כבר יובא ואושר</h3>
       <p class="meta">לא נוצרה ריצת ייבוא חדשה — הפירוק המאושר הקיים (מזהה ${state.run.duplicate_of_import_run_id}) זהה לחלוטין לטקסט שהוזן.</p>
+      <p class="meta">אם המערכת עודכנה מאז האישור המקורי וברצונך לבדוק תצוגה מקדימה מחודשת על אותו טקסט בדיוק — ניתן לנתח מחדש במפורש. זה לא משנה שום דבר בפרויקט; עדיין תעברי דרך תצוגה מקדימה, השוואה ואישור מפורש לפני שמירה.</p>
       <div class="row">
-        <button onclick="restart()">חזרה למסך הזנה</button>
+        <button id="reanalyzeAnywayButton">נתח מחדש בכל זאת</button>
+        <button class="secondary" onclick="restart()">חזרה למסך הזנה</button>
         <a href="/">פתיחת AI Film OS</a>
       </div>
     </div>`;
+  $("reanalyzeAnywayButton").onclick = () => runParse(state.pendingText || "", {
+    buttonId: "reanalyzeAnywayButton", force: true,
+  });
 }
 
 // --- Phase: preview ----------------------------------------------------------
