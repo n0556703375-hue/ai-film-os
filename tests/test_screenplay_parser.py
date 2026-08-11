@@ -268,6 +268,35 @@ class DialogueVsActionTests(unittest.TestCase):
         self.assertEqual(names, ["קול האטלס"])
         self.assertEqual(result.scenes[0].blocks[0].confidence, "high")
 
+    def test_multi_word_action_sentence_without_colon_is_not_guessed_as_a_cue(self):
+        # The no-colon "low confidence" guess previously had no word-count
+        # cap (only a character-length cap), so a short action sentence
+        # with no trailing punctuation — e.g. "Samdar leads them inside" —
+        # could be mistaken for a cue. A real cue is a name, at most a
+        # couple of words, never a full sentence.
+        text = (
+            "1. INT. ROOM - DAY\n\n"
+            "סמדר מובילה אותן אותן פנימה\n"
+            "הן נכנסות בשקט.\n\n"
+            "דני:\n"
+            "היי.\n"
+        )
+        result = parse_screenplay(text)
+        names = [c.canonical_name for c in result.characters]
+        self.assertEqual(names, ["דני"])
+
+    def test_negation_and_door_lead_word_lines_are_not_guessed_as_cues(self):
+        # "לא ירוק" ("not green") and "הדלת נפתחת" ("the door opens") are
+        # two-word action fragments that pass the word-count cap but are
+        # never real character names — negation words and physical objects
+        # never open a speaker cue.
+        for line in ["לא ירוק", "הדלת נפתחת"]:
+            with self.subTest(line=line):
+                text = f"1. INT. ROOM - DAY\n\n{line}\nעוד פעולה כאן.\n\nדני:\nהיי.\n"
+                result = parse_screenplay(text)
+                names = [c.canonical_name for c in result.characters]
+                self.assertEqual(names, ["דני"])
+
     def test_colon_wrapped_onto_start_of_next_line_is_reattached(self):
         # Same RTL copy-paste artifact as the period case above, but with a
         # colon: a narration lead-in's trailing colon lands on the *next*
