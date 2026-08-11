@@ -375,6 +375,10 @@ _HEBREW_CUE_DISQUALIFYING_FIRST_WORDS = {
     # transit center:") — the same lead-in pattern as "the screen:", just
     # with a different label noun. Never a speaking character's name.
     "תוצאה", "אפשרויות", "רשימת", "מקלידה", "במרכז",
+    # "not" / "no" as a sentence-opening negation ("Not final. But it
+    # looks...") and "the door" as a physical object — never how a real
+    # character's name begins.
+    "לא", "הדלת",
 }
 _DIGIT_RE = re.compile(r"\d")
 
@@ -436,11 +440,20 @@ def _looks_like_character_cue(line: str, has_more_content: bool) -> tuple[bool, 
             return False, ""
         # No case distinction in Hebrew and no colon convention used — a
         # short standalone line ahead of more text is a plausible cue, but
-        # this is a real guess, not a confirmed structural signal. Still
-        # never guessed at all when it opens with the same disqualifying
-        # words as the colon case (e.g. a fragmented "סצנה ..." heading
-        # left behind by a mid-word PDF line-wrap).
-        if len(name) <= 25 and not re.search(r"[.!?]$", name) and not _has_digit_or_disqualifying_first_word(name):
+        # this is a real guess, not a confirmed structural signal. A real
+        # cue is a name (at most a couple of words); anything longer is an
+        # action sentence that merely lacks trailing punctuation, not a
+        # speaker. Still never guessed at all when it opens with the same
+        # disqualifying words as the colon case (e.g. a fragmented "סצנה
+        # ..." heading left behind by a mid-word PDF line-wrap).
+        words = name.split()
+        if (
+            words
+            and len(words) <= MAX_HEBREW_CUE_WORDS
+            and len(name) <= 25
+            and not re.search(r"[.!?]$", name)
+            and not _has_digit_or_disqualifying_first_word(name)
+        ):
             return True, "low"
         return False, ""
 
