@@ -215,6 +215,37 @@ def _is_page_break_artifact(line: str) -> bool:
     return False
 
 
+_WRAPPED_LEADING_PERIOD_RE = re.compile(r"^\.(?=[A-Za-z֐-׿])")
+
+
+def _reattach_wrapped_leading_punctuation(lines: list[str]) -> list[str]:
+    """Undo a common RTL copy-paste artifact: a sentence-ending period
+    that lands on the *start* of the next visual line instead of the end
+    of the one it belongs to — a source page rendering as
+    "...רגע\n.דבורה:\n..." instead of "...רגע.\nדבורה:\n...". Left alone,
+    this breaks the previous line's own end-of-sentence punctuation check
+    *and* glues a stray leading period onto the next line's cue name,
+    which can fragment one real speaker into two entities and mis-cue an
+    action line as a low-confidence character. Only triggers when the
+    period is immediately followed by a letter (no space) — a genuine
+    list marker like ". " or ".1" is left untouched, and only when the
+    immediately preceding line is non-blank and not already terminated.
+    """
+    fixed = list(lines)
+    for index, line in enumerate(fixed):
+        if not _WRAPPED_LEADING_PERIOD_RE.match(line):
+            continue
+        previous_index = index - 1
+        if previous_index < 0:
+            continue
+        previous_line = fixed[previous_index]
+        if not previous_line or re.search(r"[.!?:]$", previous_line):
+            continue
+        fixed[previous_index] = previous_line + "."
+        fixed[index] = line[1:]
+    return fixed
+
+
 def _split_lines(screenplay: str) -> list[str]:
     lines = screenplay.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     result = []
@@ -222,7 +253,7 @@ def _split_lines(screenplay: str) -> list[str]:
         if _is_page_break_artifact(line):
             continue
         result.append(_normalize_line(line))
-    return result
+    return _reattach_wrapped_leading_punctuation(result)
 
 
 def _has_more_content(lines: list[str], from_index: int) -> bool:
@@ -285,14 +316,55 @@ def _looks_like_parenthetical(text: str) -> bool:
 
 
 def _strip_cue_annotation(text: str) -> tuple[str, str]:
-    """Split a character cue line into (name, trailing annotation)."""
+    """Split a character cue line into (name, trailing annotation).
+
+    Also strips stray leading punctuation (a period, comma, or dash) from
+    the name. This is not cosmetic: copy-pasting Hebrew (RTL) text out of
+    a PDF frequently displaces a sentence-ending period onto the *start*
+    of the next visual line — e.g. a source page rendering as
+    "...רגע\n.דבורה:\n..." — which would otherwise produce ".דבורה" as a
+    distinct character from every clean "דבורה" cue elsewhere, silently
+    fragmenting one real speaker into two entities. raw_text is left
+    untouched; this only affects the extracted name used for grouping.
+    """
     working = text.strip().rstrip(":").strip()
+    working = working.lstrip(".,;:־-").strip()
     annotation = ""
     match = _CUE_ANNOTATION_RE.search(working)
     if match:
         annotation = match.group(1).strip()
         working = working[: match.start()].strip()
     return working, annotation
+
+
+# Hebrew has no case distinction to signal "this line is a name" the way
+# English's ALL-CAPS convention does, so a trailing colon is the only
+# structural signal available — but plenty of ordinary action lines also
+# end with a colon to introduce an on-screen message, a list, or a sign
+# ("על המסך:", "היא פותחת שלוש שכבות:"). Real character cues in practice
+# are short (a name, or a short descriptive role like "קול האטלס" or
+# "רובוט ניקוי" — never more than two words in practice); a colon-
+# terminated line that is longer, opens with a preposition or pronoun
+# (which a name never does), or contains a digit (a name never does
+# either — a bare digit here is a timestamp or page number that a PDF
+# export fused onto the adjacent text with no space) is a narration
+# lead-in, not a cue.
+MAX_HEBREW_CUE_WORDS = 2
+_HEBREW_CUE_DISQUALIFYING_FIRST_WORDS = {
+    "על", "אל", "מול", "ליד", "אצל", "עם", "בתוך", "מתחת", "מעל",
+    "אחרי", "לפני", "היא", "הוא", "הם", "הן", "כש", "אם", "כי",
+    "אבל", "אז", "גם", "רק", "כל",
+}
+_DIGIT_RE = re.compile(r"\d")
+
+
+def _looks_like_hebrew_cue_colon_line(name: str) -> bool:
+    if _DIGIT_RE.search(name):
+        return False
+    words = name.split()
+    if not words or len(words) > MAX_HEBREW_CUE_WORDS:
+        return False
+    return words[0] not in _HEBREW_CUE_DISQUALIFYING_FIRST_WORDS
 
 
 def _looks_like_character_cue(line: str, has_more_content: bool) -> tuple[bool, str]:
@@ -328,7 +400,14 @@ def _looks_like_character_cue(line: str, has_more_content: bool) -> tuple[bool, 
 
     if has_hebrew:
         if ends_with_colon:
-            return True, "high"
+            if _looks_like_hebrew_cue_colon_line(name):
+                return True, "high"
+            # A colon-terminated line that's too long, or opens with a
+            # preposition/pronoun, reads as narration introducing an
+            # on-screen message or list rather than a speaker's name —
+            # never guessed as a cue at all, so it folds into action text
+            # instead of fabricating dialogue for a non-existent speaker.
+            return False, ""
         # No case distinction in Hebrew and no colon convention used — a
         # short standalone line ahead of more text is a plausible cue, but
         # this is a real guess, not a confirmed structural signal.
