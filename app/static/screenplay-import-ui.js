@@ -30,16 +30,27 @@ async function apiCall(url, options = {}) {
 // organizational filter, "Rimon") blocks POST bodies above some threshold
 // to this same endpoint with an HTML block page disguised as HTTP 200,
 // while small POSTs to the identical path go through untouched.
-// Production traffic showed both a ~7.4KB and a ~61KB request blocked —
-// there's no reliable fixed size to pick up front — so instead of
-// guessing one, this starts at a modest size and, whenever a piece gets
-// the same block signature, halves *that piece* and retries rather than
-// failing outright. Chunking is purely a transport concern: the server
-// only ever parses the fully reassembled text in one call
-// (app/services/chunked_screenplay_upload.py), so none of this changes
-// how the screenplay is understood.
+// Production traffic showed a ~7.4KB and a ~61KB request blocked, and
+// later a ~1000-character (under 2KB) request blocked too — there's no
+// reliable fixed size to pick up front — so instead of guessing one,
+// this starts at a modest size and, whenever a piece gets the same block
+// signature, halves *that piece* and retries rather than failing
+// outright. It also pauses briefly before each retry: production traffic
+// has shown blocks persisting even as chunks shrink toward the floor,
+// which is consistent with the filter also reacting to a fast burst of
+// requests to the same path, not size alone — spacing requests out costs
+// little and can only help that case. Chunking is purely a transport
+// concern: the server only ever parses the fully reassembled text in one
+// call (app/services/chunked_screenplay_upload.py), so none of this
+// changes how the screenplay is understood.
 const UPLOAD_CHUNK_START_CHARS = 1000;
-const UPLOAD_CHUNK_MIN_CHARS = 80;
+const UPLOAD_CHUNK_MIN_CHARS = 20;
+const UPLOAD_RETRY_DELAY_MS = 400;
+const UPLOAD_MAX_FLOOR_RETRIES = 4;
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function generateUploadId() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
@@ -59,6 +70,7 @@ async function uploadScreenplayInChunks(text, { projectId, sourceType, sourceFil
   const totalChars = text.length || 1;
   let offset = 0;
   let chunkSize = UPLOAD_CHUNK_START_CHARS;
+  let floorRetries = 0;
   let result = null;
 
   do {
@@ -82,14 +94,26 @@ async function uploadScreenplayInChunks(text, { projectId, sourceType, sourceFil
         }),
       });
     } catch (error) {
-      if (NETWORK_FILTER_ERROR_CODES.has(error && error.code) && chunkSize > UPLOAD_CHUNK_MIN_CHARS) {
-        chunkSize = Math.max(UPLOAD_CHUNK_MIN_CHARS, Math.floor(chunkSize / 2));
-        continue; // retry the same offset at a smaller size
+      if (NETWORK_FILTER_ERROR_CODES.has(error && error.code)) {
+        if (chunkSize > UPLOAD_CHUNK_MIN_CHARS) {
+          chunkSize = Math.max(UPLOAD_CHUNK_MIN_CHARS, Math.floor(chunkSize / 2));
+          await delay(UPLOAD_RETRY_DELAY_MS);
+          continue; // retry the same offset at a smaller size, after a short pause
+        }
+        // Already at the floor size — can't shrink further. If this looks
+        // like a burst/rate reaction rather than a pure size limit, waiting
+        // longer (not smaller) is the only thing left to try before giving up.
+        if (floorRetries < UPLOAD_MAX_FLOOR_RETRIES) {
+          floorRetries += 1;
+          await delay(UPLOAD_RETRY_DELAY_MS * (floorRetries + 1));
+          continue;
+        }
       }
       throw error;
     }
 
     offset += size;
+    floorRetries = 0;
     if (onProgress) onProgress(offset, totalChars);
   } while (offset < text.length);
 
