@@ -96,6 +96,7 @@ class SceneUpdate(BaseModel):
     beginning: str | None = Field(None, max_length=10000)
     ending: str | None = Field(None, max_length=10000)
     notes: str | None = Field(None, max_length=10000)
+    recommended_shot_count: int | None = Field(None, ge=1, le=20)
 
 class SceneCreate(BaseModel):
     project_id: int = Field(default=1, ge=1)

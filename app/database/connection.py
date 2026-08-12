@@ -54,6 +54,7 @@ def migrate_database(conn: sqlite3.Connection) -> None:
         "raw_scene_text": "TEXT NOT NULL DEFAULT ''",
         "synopsis": "TEXT NOT NULL DEFAULT ''",
         "import_run_id": "INTEGER",
+        "recommended_shot_count": "INTEGER",
     })
     _add_columns(conn, "assets", {
         "lock_status": "TEXT NOT NULL DEFAULT 'draft'",
