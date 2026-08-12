@@ -54,6 +54,15 @@ def list_screenplay_locations(project_id: int) -> list[dict]:
     return [_decode_entity(row) for row in rows]
 
 
+def list_screenplay_props(project_id: int) -> list[dict]:
+    with closing(get_connection()) as conn:
+        rows = conn.execute(
+            "SELECT * FROM screenplay_props WHERE project_id=? ORDER BY canonical_name",
+            (project_id,),
+        ).fetchall()
+    return [_decode_entity(row) for row in rows]
+
+
 def _decode_entity(row) -> dict:
     data = dict(row)
     data["aliases"] = json.loads(data.pop("aliases_json") or "[]")
@@ -70,8 +79,16 @@ def commit_breakdown(project_id: int, import_run_id: int, plan: dict) -> dict:
             carry no downstream shots — this function does not re-check)
         scenes_unchanged: list of (existing_scene_id, scene dict) pairs —
             content_blocks/character links are left untouched for these
-        characters / locations: the full canonical breakdown entity lists
-            (project-wide; upserted regardless of which scenes changed)
+        characters / locations / props: the full canonical breakdown entity
+            lists (project-wide; upserted regardless of which scenes changed)
+
+    Every character, location, and prop the breakdown reports also gets a
+    matching Story Bible card in ``assets`` if one doesn't already exist by
+    name (see ``_sync_story_bible_assets``) — this is what keeps the Story
+    Bible from silently missing entities a re-parsed/updated screenplay
+    introduces. An existing card is never modified or re-created: a
+    creator's manual edits (description, visual rules, approval, lock) are
+    never overwritten by a script re-import.
 
     Either the whole plan is applied and import_run_id becomes 'approved',
     or nothing is: any exception propagates before the transaction commits,
@@ -142,6 +159,10 @@ def commit_breakdown(project_id: int, import_run_id: int, plan: dict) -> dict:
             )
         for location in plan.get("locations", []):
             _upsert_entity_in_conn(conn, "screenplay_locations", project_id, location)
+        for prop in plan.get("props", []):
+            _upsert_entity_in_conn(conn, "screenplay_props", project_id, prop)
+
+        assets_created = _sync_story_bible_assets_in_conn(conn, project_id, plan)
 
         name_to_canonical = _build_alias_lookup(plan.get("characters", []))
         all_scenes = (
@@ -185,6 +206,8 @@ def commit_breakdown(project_id: int, import_run_id: int, plan: dict) -> dict:
         "scenes_unchanged": len(plan.get("scenes_unchanged", [])),
         "characters_created": len(plan.get("characters", [])),
         "locations_created": len(plan.get("locations", [])),
+        "props_created": len(plan.get("props", [])),
+        "story_bible_cards_created": assets_created,
     }
 
 
@@ -206,6 +229,47 @@ def _replace_blocks(conn, scene_id: int, blocks: list[dict]) -> None:
             for block in blocks
         ],
     )
+
+
+# Maps a breakdown entity list (plan key) to the Story Bible asset_type it
+# should surface as. Keeping this in one place is what makes the sync below
+# treat characters, locations, and props identically instead of only some
+# of them getting cards.
+_ENTITY_PLAN_KEY_TO_ASSET_TYPE = {
+    "characters": "דמות",
+    "locations": "לוקיישן",
+    "props": "אביזר",
+}
+
+
+def _sync_story_bible_assets_in_conn(conn, project_id: int, plan: dict) -> int:
+    """Create a Story Bible ``assets`` card for any breakdown entity that
+    doesn't already have one by (project, asset_type, name).
+
+    Deliberately additive-only: an existing card is left completely
+    untouched (never renamed, re-approved, or reset), so this can run on
+    every approved import — including a re-parse of an already-known
+    screenplay — without clobbering anything a user already curated.
+    """
+    created = 0
+    for plan_key, asset_type in _ENTITY_PLAN_KEY_TO_ASSET_TYPE.items():
+        for entity in plan.get(plan_key, []):
+            name = entity["canonical_name"]
+            existing = conn.execute(
+                "SELECT 1 FROM assets WHERE project_id=? AND asset_type=? AND name=?",
+                (project_id, asset_type, name),
+            ).fetchone()
+            if existing:
+                continue
+            conn.execute(
+                """
+                INSERT INTO assets (project_id, asset_type, name, approved)
+                VALUES (?, ?, ?, 0)
+                """,
+                (project_id, asset_type, name),
+            )
+            created += 1
+    return created
 
 
 def _upsert_entity_in_conn(conn, table: str, project_id: int, entity: dict) -> int:

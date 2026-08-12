@@ -111,7 +111,7 @@ def create_import_run(
         scene_count=len(breakdown["scenes"]),
         character_count=len(breakdown["characters"]),
         location_count=len(breakdown["locations"]),
-        prop_count=0,
+        prop_count=len(breakdown["props"]),
         status="review_required",
     )
 
@@ -141,7 +141,7 @@ def reparse_import_run(import_run_id: int, screenplay_text: str | None = None) -
         "scene_count": len(breakdown["scenes"]),
         "character_count": len(breakdown["characters"]),
         "location_count": len(breakdown["locations"]),
-        "prop_count": 0,
+        "prop_count": len(breakdown["props"]),
         "status": "review_required",
     })
 
@@ -282,6 +282,7 @@ def approve_import_run(import_run_id: int, *, confirm: bool = False) -> dict:
     new_scenes = breakdown.get("scenes", [])
     characters = breakdown.get("characters", [])
     locations = breakdown.get("locations", [])
+    props = breakdown.get("props", [])
 
     diff = compute_diff(project_id, new_scenes)
 
@@ -302,6 +303,7 @@ def approve_import_run(import_run_id: int, *, confirm: bool = False) -> dict:
         "scenes_unchanged": diff["unchanged"],
         "characters": characters,
         "locations": locations,
+        "props": props,
     }
     summary = screenplay_structure.commit_breakdown(project_id, import_run_id, plan)
     summary["diff"] = _diff_summary(diff)

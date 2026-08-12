@@ -114,6 +114,7 @@ def _serialize_run_detail(run: dict) -> dict:
         "scenes": breakdown.get("scenes", []),
         "characters": breakdown.get("characters", []),
         "locations": breakdown.get("locations", []),
+        "props": breakdown.get("props", []),
         "created_at": run.get("created_at"),
         "updated_at": run.get("updated_at"),
         "approved_at": run.get("approved_at"),

@@ -447,6 +447,39 @@ class LocationNormalizationTests(unittest.TestCase):
         self.assertEqual(location_a.first_appearance_scene_number, 1)
 
 
+class PropExtractionTests(unittest.TestCase):
+    def test_quoted_prop_in_action_line_is_extracted(self):
+        text = "1. INT. KITCHEN - DAY\n\nHe picks up the \"gun\" and hides it.\n"
+        result = parse_screenplay(text)
+        names = [p.canonical_name for p in result.props]
+        self.assertEqual(names, ["gun"])
+
+    def test_hebrew_gershayim_quoted_prop_is_extracted(self):
+        text = "1. INT. MITBAH - DAY\n\nהיא מוציאה ״אקדח״ מהמגירה.\n"
+        result = parse_screenplay(text)
+        names = [p.canonical_name for p in result.props]
+        self.assertEqual(names, ["אקדח"])
+
+    def test_quoted_dialogue_is_never_treated_as_a_prop(self):
+        text = "1. INT. ROOM - DAY\n\nJOHN\n\"Get out\", he says nothing else.\n"
+        result = parse_screenplay(text)
+        self.assertEqual(result.props, [])
+
+    def test_repeated_quoted_prop_merges_and_keeps_first_scene(self):
+        text = (
+            "1. INT. ROOM - DAY\n\nThe \"knife\" gleams.\n\n"
+            "2. INT. ROOM - NIGHT\n\nThe \"knife\" is gone.\n"
+        )
+        result = parse_screenplay(text)
+        self.assertEqual(len(result.props), 1)
+        self.assertEqual(result.props[0].first_appearance_scene_number, 1)
+
+    def test_no_quoted_spans_yields_no_props(self):
+        text = "1. INT. ROOM - DAY\n\nNothing notable happens here.\n"
+        result = parse_screenplay(text)
+        self.assertEqual(result.props, [])
+
+
 class MalformedButRecoverableTests(unittest.TestCase):
     def test_missing_time_of_day_does_not_break_heading_parse(self):
         text = "1. INT. LIBRARY\n\nBooks everywhere.\n"

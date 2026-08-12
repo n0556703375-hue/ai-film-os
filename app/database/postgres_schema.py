@@ -255,6 +255,18 @@ CREATE TABLE IF NOT EXISTS screenplay_locations (
     FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS screenplay_props (
+    id BIGSERIAL PRIMARY KEY,
+    project_id BIGINT NOT NULL,
+    canonical_name TEXT NOT NULL,
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    first_appearance_scene_number INTEGER,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project_id, canonical_name),
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS scene_characters (
     scene_id BIGINT NOT NULL,
     screenplay_character_id BIGINT NOT NULL,
