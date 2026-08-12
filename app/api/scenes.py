@@ -7,6 +7,7 @@ from app.repositories import shots as shot_repo
 from app.services.generation import GenerationNotConfigured
 from app.services.prompt_builder import build_prompt
 from app.services.scene_assembly import build_scene_preview_manifest
+from app.services.scene_bible import generate_scene_bible
 from app.services.shot_map import generate_shot_map
 from app.services.screenplay_breakdown import breakdown_screenplay
 
@@ -163,6 +164,33 @@ def update_scene(scene_id: int, update: SceneUpdate):
     if not scene:
         raise HTTPException(404, "הסצנה לא נמצאה.")
     return scene
+
+
+@router.post(
+    "/{scene_id}/generate-bible",
+    summary="Fill in a scene's dramatic-purpose fields (Scene Bible) from its screenplay text using AI",
+    description=(
+        "Reads the scene's raw imported screenplay text and asks OpenAI to draft "
+        "story_goal, emotion, conflict, beginning and ending. Saves the result onto "
+        "the scene and returns it. Overwrites any existing values in those fields — "
+        "the caller is expected to warn the user before calling this on a scene that "
+        "already has bible content filled in."
+    ),
+)
+def generate_bible(scene_id: int):
+    scene = repo.get_scene(scene_id)
+    if not scene:
+        raise HTTPException(404, "הסצנה לא נמצאה.")
+    if not (scene.get("raw_scene_text") or "").strip():
+        raise HTTPException(409, "לסצנה הזו אין טקסט תסריט גולמי לנתח.")
+    project = project_repo.get_project(scene["project_id"])
+    try:
+        fields = generate_scene_bible(scene, project)
+        return repo.update_scene(scene_id, fields)
+    except GenerationNotConfigured as exc:
+        raise HTTPException(503, str(exc))
+    except Exception as exc:
+        raise HTTPException(502, f"מילוי ה-Scene Bible נכשל: {exc}")
 
 
 @router.post(

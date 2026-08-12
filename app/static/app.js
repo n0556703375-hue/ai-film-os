@@ -139,7 +139,7 @@ async function openScene(id) {
     <h2>${esc(scene.title)}</h2>
     <div class="workspace-grid">
       <div class="workspace-section">
-        <h3>Scene Bible</h3>
+        <div class="section-toolbar"><h3>Scene Bible</h3><button class="secondary" onclick="generateSceneBible(${scene.id}, ${Boolean(scene.story_goal || scene.emotion || scene.conflict || scene.beginning || scene.ending)})">מלא אוטומטית עם AI</button></div>
         <label>מספר סצנה</label><input id="scNumber" type="number" min="1" value="${scene.scene_number}">
         <label>סטטוס</label><input id="scStatus" value="${esc(scene.status || "מתוכנן")}">
         <label>שם הסצנה</label><input id="scTitle" value="${esc(scene.title)}">
@@ -174,6 +174,15 @@ async function generateShotMap(sceneId, existingCount) {
   show("<h2>יוצר מפת שוטים</h2><p>OpenAI בונה שוטים, משייך נכסים ומכין פרומפט לכל שוט…</p>");
   try {
     await api(`/api/scenes/${sceneId}/shot-map`, {method:"POST", body:JSON.stringify({shot_count:shotCount, replace_existing:replaceExisting})});
+    await openScene(sceneId);
+  } catch (error) { showError(error); }
+}
+
+async function generateSceneBible(sceneId, hasExistingContent) {
+  if (hasExistingContent && !confirm("שדות ה-Scene Bible כבר מכילים תוכן. להחליף אותו בתוכן שנוצר על ידי AI?")) return;
+  show("<h2>ממלא Scene Bible</h2><p>OpenAI קורא את טקסט הסצנה ומנסח מטרה עלילתית, רגש מרכזי, קונפליקט ומצב פתיחה/סיום…</p>");
+  try {
+    await api(`/api/scenes/${sceneId}/generate-bible`, {method:"POST"});
     await openScene(sceneId);
   } catch (error) { showError(error); }
 }
