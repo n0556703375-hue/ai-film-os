@@ -185,6 +185,7 @@ jobs:
               "scene_content_blocks": 0,
               "screenplay_characters": 0,
               "screenplay_locations": 0,
+              "screenplay_props": 0,
               "scene_characters": 0,
           }
 

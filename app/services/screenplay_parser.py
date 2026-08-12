@@ -16,10 +16,16 @@ ends up in exactly one scene's `raw_scene_text`, scenes are emitted in
 strict source order, and nothing is classified with unwarranted certainty
 (low-confidence classifications are flagged, never silently guessed).
 
-AI enrichment (narrative synopsis, thematic notes, prop suggestions) is
-intentionally NOT part of this module. It is a separate, optional,
-best-effort layer that may run over this parser's output later — it must
-never be able to alter scene boundaries, order, or block classification.
+AI enrichment (narrative synopsis, thematic notes) is intentionally NOT
+part of this module. It is a separate, optional, best-effort layer that
+may run over this parser's output later — it must never be able to alter
+scene boundaries, order, or block classification.
+
+Accessory/prop extraction is the one exception: it is deterministic and
+quote-driven, mirroring the character/location extraction below — a prop
+is only ever recognized because the screenwriter explicitly set it off in
+quotation marks inside an action line (a common screenwriting convention
+for flagging a significant object), never guessed from ordinary nouns.
 """
 
 from __future__ import annotations
@@ -96,6 +102,15 @@ _HEBREW_LETTER_RE = re.compile(r"[֐-׿]")
 _LATIN_LETTER_RE = re.compile(r"[A-Za-z]")
 
 MAX_CUE_LENGTH = 40
+
+# Matches a quoted span using any of the quote-mark conventions a Hebrew or
+# English screenplay might use for flagging a prop: straight double quotes,
+# curly double quotes, or the Hebrew gershayim mark (״). Each alternative
+# pins its own delimiter on both sides so mismatched quote styles never pair
+# up across unrelated text.
+_QUOTED_PROP_RE = re.compile(
+    r'"([^"\n]{1,40})"|“([^”\n]{1,40})”|״([^״\n]{1,40})״'
+)
 
 
 # --- Data model --------------------------------------------------------------
@@ -179,6 +194,7 @@ class ParsedScreenplay:
     scenes: list[ParsedScene]
     characters: list[ParsedEntity]
     locations: list[ParsedEntity]
+    props: list[ParsedEntity]
     warnings: list[ParseWarning]
 
     def to_dict(self) -> dict:
@@ -186,6 +202,7 @@ class ParsedScreenplay:
             "scenes": [s.to_dict() for s in self.scenes],
             "characters": [c.to_dict() for c in self.characters],
             "locations": [loc.to_dict() for loc in self.locations],
+            "props": [p.to_dict() for p in self.props],
             "warnings": [w.to_dict() for w in self.warnings],
         }
 
@@ -573,6 +590,21 @@ def _classify_lines(lines: list[str]) -> list[ContentBlock]:
     return blocks
 
 
+def _extract_quoted_props(text: str) -> list[str]:
+    """Return every quoted span in an action line, in source order.
+
+    Only action text is scanned by the caller — dialogue quoting a line of
+    speech (also delimited by quote marks in plain-text pastes) is never
+    mistaken for a prop callout.
+    """
+    props = []
+    for match in _QUOTED_PROP_RE.finditer(text):
+        span = next(group for group in match.groups() if group is not None).strip()
+        if span:
+            props.append(span)
+    return props
+
+
 # --- Canonicalization -----------------------------------------------------------
 
 def _normalize_key(value: str) -> str:
@@ -655,6 +687,7 @@ def parse_screenplay(screenplay_text: str) -> ParsedScreenplay:
     scenes: list[ParsedScene] = []
     character_occurrences: list[tuple[str, int]] = []
     location_occurrences: list[tuple[str, int]] = []
+    prop_occurrences: list[tuple[str, int]] = []
 
     for scene_number, (_start, heading, original_line, content_lines) in enumerate(segments, start=1):
         blocks = _classify_lines(content_lines)
@@ -665,6 +698,9 @@ def parse_screenplay(screenplay_text: str) -> ParsedScreenplay:
                 character_occurrences.append((block.character_name, scene_number))
                 if block.character_name not in scene_characters:
                     scene_characters.append(block.character_name)
+            if block.block_type == "action":
+                for prop_name in _extract_quoted_props(block.raw_text):
+                    prop_occurrences.append((prop_name, scene_number))
             if block.confidence == "low":
                 warnings.append(ParseWarning(
                     category="low_confidence_classification",
@@ -691,6 +727,7 @@ def parse_screenplay(screenplay_text: str) -> ParsedScreenplay:
 
     characters = _canonicalize_entities(character_occurrences)
     locations = _canonicalize_entities(location_occurrences)
+    props = _canonicalize_entities(prop_occurrences)
 
     validate_scene_order(scenes)
 
@@ -698,6 +735,7 @@ def parse_screenplay(screenplay_text: str) -> ParsedScreenplay:
         scenes=scenes,
         characters=characters,
         locations=locations,
+        props=props,
         warnings=warnings,
     )
 

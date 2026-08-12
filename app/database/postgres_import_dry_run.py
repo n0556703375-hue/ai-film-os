@@ -25,6 +25,7 @@ TABLE_ORDER = (
     "import_runs",
     "screenplay_characters",
     "screenplay_locations",
+    "screenplay_props",
     "scenes",
     "scene_content_blocks",
     "scene_characters",

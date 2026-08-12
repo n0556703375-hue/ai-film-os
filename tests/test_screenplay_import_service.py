@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from app.core.config import settings
 from app.database.connection import init_db
+from app.repositories import assets as assets_repo
 from app.repositories import projects, scenes as scene_repo, screenplay_structure, shots as shot_repo
 from app.repositories import import_runs as import_runs_repo
 from app.services import screenplay_import_service as svc
@@ -20,6 +21,9 @@ _SIMPLE_V1 = "1. INT. HOUSE - DAY\n\nJOHN\nHi there.\n"
 _TWO_SCENES = (
     "1. INT. HOUSE - DAY\n\nJOHN\nHi there.\n\n"
     "2. EXT. YARD - NIGHT\n\nMARY\nHello John.\n"
+)
+_SCENE_WITH_PROP = (
+    "1. INT. HOUSE - DAY\n\nHe picks up the \"letter\" and reads it.\n\nJOHN\nHi there.\n"
 )
 
 
@@ -135,6 +139,46 @@ class ApproveFirstImportTests(ScreenplayImportServiceTestCase):
         run = svc.create_import_run(self.project["id"], _TWO_SCENES)
         # Must not raise ImportRunConflict.
         svc.approve_import_run(run["id"], confirm=False)
+
+
+class StoryBibleSyncTests(ScreenplayImportServiceTestCase):
+    """Approving an import must create Story Bible cards for every
+    character, location, and prop the breakdown reports — this is the
+    fix for the reported bug where locations/accessories never appeared
+    in the Story Bible after a script (re-)import even though the
+    underlying screenplay-parse tables were populated correctly.
+    """
+
+    def test_approve_creates_story_bible_cards_for_all_entity_types(self):
+        run = svc.create_import_run(self.project["id"], _SCENE_WITH_PROP)
+        svc.approve_import_run(run["id"])
+
+        by_type = {}
+        for asset in assets_repo.list_assets(self.project["id"]):
+            by_type.setdefault(asset["asset_type"], []).append(asset["name"])
+
+        self.assertEqual(by_type.get("דמות"), ["JOHN"])
+        self.assertEqual(by_type.get("לוקיישן"), ["HOUSE"])
+        self.assertEqual(by_type.get("אביזר"), ["letter"])
+
+    def test_reimport_does_not_touch_an_already_curated_asset_card(self):
+        run = svc.create_import_run(self.project["id"], _SCENE_WITH_PROP)
+        svc.approve_import_run(run["id"])
+
+        location_asset = next(
+            a for a in assets_repo.list_assets(self.project["id"]) if a["asset_type"] == "לוקיישן"
+        )
+        assets_repo.update_asset(location_asset["id"], {"description": "תיאור ידני שנכתב על ידי המשתמש"})
+
+        # Re-approving the exact same text (forced re-parse) must not touch
+        # the manually-curated card.
+        second_run = svc.create_import_run(self.project["id"], _SCENE_WITH_PROP, force=True)
+        svc.approve_import_run(second_run["id"])
+
+        refreshed = assets_repo.get_asset(location_asset["id"])
+        self.assertEqual(refreshed["description"], "תיאור ידני שנכתב על ידי המשתמש")
+        locations = [a for a in assets_repo.list_assets(self.project["id"]) if a["asset_type"] == "לוקיישן"]
+        self.assertEqual(len(locations), 1)
 
 
 class ReimportSafetyTests(ScreenplayImportServiceTestCase):

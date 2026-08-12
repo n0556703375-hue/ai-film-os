@@ -288,6 +288,7 @@ function renderPreview() {
         <div class="pipeline-step"><strong>${run.scene_count}</strong>סצנות</div>
         <div class="pipeline-step"><strong>${run.character_count}</strong>דמויות</div>
         <div class="pipeline-step"><strong>${run.location_count}</strong>לוקיישנים</div>
+        <div class="pipeline-step"><strong>${run.prop_count}</strong>אביזרים</div>
         <div class="pipeline-step"><strong>${run.warnings.length}</strong>אזהרות</div>
       </div>
       ${warningsHtml(run.warnings)}
@@ -306,6 +307,8 @@ function renderPreview() {
       ${run.characters.map((c) => entityCard(c, "הופעה")).join("") || '<p class="meta">לא זוהו דמויות.</p>'}
       <div class="section-toolbar"><h3>לוקיישנים</h3></div>
       ${run.locations.map((l) => entityCard(l, "הופעה")).join("") || '<p class="meta">לא זוהו לוקיישנים.</p>'}
+      <div class="section-toolbar"><h3>אביזרים</h3></div>
+      ${run.props.map((p) => entityCard(p, "הופעה")).join("") || '<p class="meta">לא זוהו אביזרים מסומנים במרכאות.</p>'}
       <div class="row" style="margin-top:16px">
         <button id="reviewButton">השוואה מול הפרויקט ואישור</button>
         ${editing ? "" : '<button class="secondary" id="editButton">עריכת התסריט וניתוח מחדש</button>'}
@@ -415,7 +418,8 @@ function renderDone() {
         <div class="pipeline-step"><strong>${result.scenes_removed}</strong>הוסרו</div>
         <div class="pipeline-step"><strong>${result.scenes_unchanged}</strong>ללא שינוי</div>
       </div>
-      <p class="meta">${result.characters_created} דמויות ו-${result.locations_created} לוקיישנים נשמרו במאגר הפרויקט.</p>
+      <p class="meta">${result.characters_created} דמויות, ${result.locations_created} לוקיישנים ו-${result.props_created} אביזרים נשמרו במאגר הפרויקט.</p>
+      <p class="meta">${result.story_bible_cards_created} כרטיסי Story Bible חדשים נוצרו עבור ישויות שעדיין לא היו בספר הסיפור.</p>
       <div class="row">
         <a href="/">פתיחת AI Film OS</a>
         <button class="secondary" onclick="restart()">ייבוא תסריט נוסף</button>

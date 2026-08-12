@@ -143,6 +143,19 @@ def migrate_database(conn: sqlite3.Connection) -> None:
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS screenplay_props (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            canonical_name TEXT NOT NULL,
+            aliases_json TEXT NOT NULL DEFAULT '[]',
+            first_appearance_scene_number INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, canonical_name),
+            FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS scene_characters (
             scene_id INTEGER NOT NULL,
             screenplay_character_id INTEGER NOT NULL,
