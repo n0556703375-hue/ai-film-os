@@ -152,7 +152,7 @@ async function openScene(id) {
         <button onclick="saveScene(${scene.id})">שמירת הסצנה</button>
       </div>
       <div class="workspace-section">
-        <div class="section-toolbar"><h3>שוטים בסצנה</h3><div class="row"><button class="secondary" onclick="generateShotMap(${scene.id}, ${scene.shots.length})">יצירת מפת שוטים ופרומפטים</button><button onclick="newShot(${scene.id})">שוט חדש</button></div></div>
+        <div class="section-toolbar"><h3>שוטים בסצנה${scene.recommended_shot_count ? ` <span class="meta">(מומלץ: ${scene.recommended_shot_count} שוטים)</span>` : ""}</h3><div class="row"><button class="secondary" onclick="generateShotMap(${scene.id}, ${scene.shots.length}, ${scene.recommended_shot_count || 6})">יצירת מפת שוטים ופרומפטים</button><button onclick="newShot(${scene.id})">שוט חדש</button></div></div>
         ${scene.shots.map((shot)=>`
           <div class="card">
             <div class="meta">שוט ${shot.shot_number} · ${shot.asset_count} נכסים</div>
@@ -164,8 +164,8 @@ async function openScene(id) {
     </div>`);
 }
 
-async function generateShotMap(sceneId, existingCount) {
-  const value = prompt("כמה שוטים ליצור?", "6");
+async function generateShotMap(sceneId, existingCount, recommendedCount = 6) {
+  const value = prompt("כמה שוטים ליצור?", String(recommendedCount));
   if (value === null) return;
   const shotCount = Number(value);
   if (!Number.isInteger(shotCount) || shotCount < 1 || shotCount > 20) return alert("יש לבחור 1–20 שוטים.");

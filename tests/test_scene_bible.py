@@ -27,7 +27,7 @@ class SceneBibleServiceTests(unittest.TestCase):
     def test_parses_valid_json_response_into_bible_fields(self):
         payload = (
             '{"story_goal": "a", "emotion": "b", "conflict": "c", '
-            '"beginning": "d", "ending": "e"}'
+            '"beginning": "d", "ending": "e", "recommended_shot_count": 8}'
         )
         with patch("app.services.scene_bible._openai_client") as client:
             client.return_value.responses.create.return_value = _fake_response(payload)
@@ -37,14 +37,17 @@ class SceneBibleServiceTests(unittest.TestCase):
             )
         self.assertEqual(
             result,
-            {"story_goal": "a", "emotion": "b", "conflict": "c", "beginning": "d", "ending": "e"},
+            {
+                "story_goal": "a", "emotion": "b", "conflict": "c",
+                "beginning": "d", "ending": "e", "recommended_shot_count": 8,
+            },
         )
 
     def test_strips_markdown_code_fence_before_parsing(self):
         payload = (
             "```json\n"
             '{"story_goal": "a", "emotion": "b", "conflict": "c", '
-            '"beginning": "d", "ending": "e"}\n'
+            '"beginning": "d", "ending": "e", "recommended_shot_count": 5}\n'
             "```"
         )
         with patch("app.services.scene_bible._openai_client") as client:
@@ -66,6 +69,26 @@ class SceneBibleServiceTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 generate_scene_bible({"raw_scene_text": "x"}, {"name": "p"})
 
+    def test_shot_count_is_clamped_to_the_valid_range(self):
+        payload = (
+            '{"story_goal": "a", "emotion": "b", "conflict": "c", '
+            '"beginning": "d", "ending": "e", "recommended_shot_count": 999}'
+        )
+        with patch("app.services.scene_bible._openai_client") as client:
+            client.return_value.responses.create.return_value = _fake_response(payload)
+            result = generate_scene_bible({"raw_scene_text": "x"}, {"name": "p"})
+        self.assertEqual(result["recommended_shot_count"], 20)
+
+    def test_missing_or_invalid_shot_count_falls_back_to_default(self):
+        payload = (
+            '{"story_goal": "a", "emotion": "b", "conflict": "c", '
+            '"beginning": "d", "ending": "e", "recommended_shot_count": "lots"}'
+        )
+        with patch("app.services.scene_bible._openai_client") as client:
+            client.return_value.responses.create.return_value = _fake_response(payload)
+            result = generate_scene_bible({"raw_scene_text": "x"}, {"name": "p"})
+        self.assertEqual(result["recommended_shot_count"], 6)
+
 
 class SceneBibleApiTests(unittest.TestCase):
     @patch("app.api.scenes.generate_scene_bible")
@@ -85,7 +108,7 @@ class SceneBibleApiTests(unittest.TestCase):
         get_project.return_value = {"id": 1, "name": "P"}
         fields = {
             "story_goal": "a", "emotion": "b", "conflict": "c",
-            "beginning": "d", "ending": "e",
+            "beginning": "d", "ending": "e", "recommended_shot_count": 7,
         }
         generate_bible_fn.return_value = fields
         update_scene.return_value = {"id": 5, **fields}

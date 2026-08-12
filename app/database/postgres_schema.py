@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS scenes (
     raw_scene_text TEXT NOT NULL DEFAULT '',
     synopsis TEXT NOT NULL DEFAULT '',
     import_run_id BIGINT,
+    recommended_shot_count INTEGER,
     FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
