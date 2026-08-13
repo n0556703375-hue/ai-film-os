@@ -27,7 +27,14 @@ def create_generated_shots(scene_id: int, shots: list[dict], replace_existing: b
             names = ",".join(fields)
             cur = conn.execute(f"INSERT INTO shots ({names}) VALUES ({','.join('?' for _ in fields)})",
                                list(fields.values()))
-            ids = [int(v) for v in shot.get("asset_ids", []) if int(v) in valid_assets]
+            ids = []
+            for v in shot.get("asset_ids", []):
+                try:
+                    asset_id = int(v)
+                except (TypeError, ValueError):
+                    continue
+                if asset_id in valid_assets:
+                    ids.append(asset_id)
             conn.executemany("INSERT OR IGNORE INTO shot_assets (shot_id,asset_id) VALUES (?,?)",
                              [(cur.lastrowid, asset_id) for asset_id in ids])
         conn.commit()
