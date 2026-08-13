@@ -368,6 +368,64 @@ class DialogueVsActionTests(unittest.TestCase):
         self.assertEqual(blocks[0].raw_text, "בואי הנה.")
         self.assertEqual(blocks[1].raw_text, "אני באה.")
 
+    def test_inline_colon_dialogue_on_one_line_is_recognized(self):
+        # A stage-play/transcript convention: speaker and their line share
+        # one line ("רבקה: מי נתנה לך את הגזרה הזאת?"), unlike the standard
+        # screenplay convention of a cue on its own line with dialogue
+        # below. Without support for this, every such line falls through as
+        # plain action text and no character is ever recognized — found via
+        # a real production screenplay that came back with 0 characters.
+        text = (
+            "1. פנים. חדר - יום\n\n"
+            "תנה: צעירה ממנה, מחזיקה סלסלה ריקה.\n"
+            "רבקה: להחזיר את זה לעירמה השנייה?\n"
+            "רבקה: מי נתנה לך את הגזרה הזאת?\n"
+            "תנה: היא הייתה כאן.\n"
+        )
+        result = parse_screenplay(text)
+        blocks = result.scenes[0].blocks
+        self.assertEqual([b.block_type for b in blocks], ["dialogue"] * 4)
+        self.assertEqual(
+            [b.character_name for b in blocks], ["תנה", "רבקה", "רבקה", "תנה"],
+        )
+        self.assertEqual(blocks[0].raw_text, "צעירה ממנה, מחזיקה סלסלה ריקה.")
+        self.assertEqual(blocks[2].raw_text, "מי נתנה לך את הגזרה הזאת?")
+        names = [c.canonical_name for c in result.characters]
+        self.assertEqual(names, ["תנה", "רבקה"])
+        self.assertEqual(result.warnings, [])
+
+    def test_inline_colon_dialogue_recognized_for_latin_all_caps_name_too(self):
+        text = "1. INT. ROOM - DAY\n\nANNA: Did you get my message?\nDAVID: Yeah, I saw it.\n"
+        result = parse_screenplay(text)
+        blocks = result.scenes[0].blocks
+        self.assertEqual([b.character_name for b in blocks], ["ANNA", "DAVID"])
+        self.assertEqual(blocks[0].raw_text, "Did you get my message?")
+
+    def test_inline_colon_narration_lead_in_is_not_mistaken_for_a_speaker(self):
+        # Same rejection rules as the standalone colon-cue case must apply
+        # here too: "she opens three layers: the first is empty" is
+        # narration, not a two-word speaker name introducing dialogue.
+        text = (
+            "1. INT. ROOM - DAY\n\n"
+            "היא פותחת שלוש שכבות: האחת ריקה.\n\n"
+            "דני: בוא הנה.\n"
+        )
+        result = parse_screenplay(text)
+        names = [c.canonical_name for c in result.characters]
+        self.assertEqual(names, ["דני"])
+        action_text = " ".join(
+            b.raw_text for b in result.scenes[0].blocks if b.block_type == "action"
+        )
+        self.assertIn("היא פותחת שלוש שכבות", action_text)
+
+    def test_inline_colon_dialogue_stops_at_next_speaker_without_blank_line(self):
+        text = "1. פנים. חדר - יום\n\nיוכבד: בואי הנה.\nליאורה: אני באה.\n"
+        result = parse_screenplay(text)
+        blocks = result.scenes[0].blocks
+        self.assertEqual([b.character_name for b in blocks], ["יוכבד", "ליאורה"])
+        self.assertEqual(blocks[0].raw_text, "בואי הנה.")
+        self.assertEqual(blocks[1].raw_text, "אני באה.")
+
     def test_block_order_is_preserved_within_a_scene(self):
         text = (
             "1. INT. ROOM - DAY\n\n"

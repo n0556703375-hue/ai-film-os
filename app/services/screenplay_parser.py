@@ -98,6 +98,7 @@ _TRANSITION_PHRASES = {
 }
 
 _CUE_ANNOTATION_RE = re.compile(r"\(([^()]*)\)\s*$")
+_INLINE_CUE_SPLIT_RE = re.compile(r"^(?P<name>[^\n:]{1,40}?):\s+(?P<rest>\S.*)$")
 _HEBREW_LETTER_RE = re.compile(r"[֐-׿]")
 _LATIN_LETTER_RE = re.compile(r"[A-Za-z]")
 
@@ -477,6 +478,47 @@ def _looks_like_character_cue(line: str, has_more_content: bool) -> tuple[bool, 
     return False, ""
 
 
+def _split_inline_dialogue_cue(line: str) -> tuple[str, str] | None:
+    """Detect a same-line "NAME: dialogue" cue and split it into
+    (character_name, dialogue_text).
+
+    This is a distinct convention from the standard screenplay cue (a name
+    alone on its own line, dialogue below it): some scripts — notably
+    stage-play/transcript-style pastes — put the speaker and their line on
+    one line, colon-separated. Without this, every such line falls through
+    as plain action text and no character is ever recognized. The name
+    portion is validated with the exact same short-name heuristic already
+    trusted for the standalone colon-terminated cue (see
+    ``_looks_like_hebrew_cue_colon_line``), so an action line that merely
+    contains a mid-sentence colon (a time, an on-screen message lead-in,
+    a list) is rejected the same way it already would be there.
+    """
+    match = _INLINE_CUE_SPLIT_RE.match(line)
+    if not match:
+        return None
+    if _match_heading(line) or _looks_like_transition(line):
+        return None
+
+    name = match.group("name").strip()
+    rest = match.group("rest").strip()
+    if not name or not rest:
+        return None
+
+    has_hebrew = bool(_HEBREW_LETTER_RE.search(name))
+    has_latin = bool(_LATIN_LETTER_RE.search(name))
+
+    if has_latin and not has_hebrew:
+        letters_only = re.sub(r"[^A-Za-z]", "", name)
+        if letters_only and letters_only == letters_only.upper():
+            return name, rest
+        return None
+
+    if has_hebrew and _looks_like_hebrew_cue_colon_line(name):
+        return name, rest
+
+    return None
+
+
 def _classify_lines(lines: list[str]) -> list[ContentBlock]:
     """Classify a scene's content lines into ordered blocks.
 
@@ -548,7 +590,7 @@ def _classify_lines(lines: list[str]) -> list[ContentBlock]:
                 candidate_is_cue, _candidate_confidence = _looks_like_character_cue(
                     candidate, _has_more_content(lines, index + 1)
                 )
-                if candidate_is_cue:
+                if candidate_is_cue or _split_inline_dialogue_cue(candidate):
                     break
                 dialogue_lines.append(candidate)
                 index += 1
@@ -574,6 +616,38 @@ def _classify_lines(lines: list[str]) -> list[ContentBlock]:
                     confidence=confidence,
                 ))
                 order += 1
+            continue
+
+        inline_cue = _split_inline_dialogue_cue(line)
+        if inline_cue:
+            flush_action()
+            character_name, first_dialogue_line = inline_cue
+            index += 1
+            dialogue_lines = [first_dialogue_line]
+            while index < n and lines[index]:
+                candidate = lines[index]
+                # Same stopping rule as the standalone-cue case above: a new
+                # speaker's line (of either cue style) or a new structural
+                # boundary ends this speaker's turn rather than being
+                # swallowed into it.
+                if _match_heading(candidate) or _looks_like_transition(candidate):
+                    break
+                candidate_is_cue, _candidate_confidence = _looks_like_character_cue(
+                    candidate, _has_more_content(lines, index + 1)
+                )
+                if candidate_is_cue or _split_inline_dialogue_cue(candidate):
+                    break
+                dialogue_lines.append(candidate)
+                index += 1
+
+            blocks.append(ContentBlock(
+                order=order,
+                block_type="dialogue",
+                raw_text="\n".join(dialogue_lines).strip(),
+                character_name=character_name,
+                confidence="high",
+            ))
+            order += 1
             continue
 
         if _looks_like_parenthetical(line):
