@@ -102,6 +102,95 @@ class ScreenplayImportUiJsTests(unittest.TestCase):
         self.assertNotIn("<i>INT. X</i>", result)
         self.assertIn("&lt;i&gt;", result)
 
+    def test_upload_chunk_size_recovers_after_a_block_clears(self):
+        """A block-page response (non-JSON body, HTTP 200 — the exact shape a
+        network content filter returns) must shrink the chunk size, and once
+        requests start succeeding again the size must climb back toward the
+        starting size instead of staying pinned at the floor for the rest of
+        the upload. Runs the real safe_api.js parser alongside
+        screenplay-import-ui.js so the retry decision (which error codes
+        count as "blocked") is exercised end to end, not re-implemented here.
+        """
+        safe_api_path = ROOT / "app" / "static" / "safe_api.js"
+        script = textwrap.dedent(
+            f"""
+            const fs = require("fs");
+            const vm = require("vm");
+            const uiSource = fs.readFileSync({json.dumps(str(SOURCE))}, "utf-8");
+            const safeApiSource = fs.readFileSync({json.dumps(str(safe_api_path))}, "utf-8");
+
+            const requestSizes = [];
+            let callCount = 0;
+            const BLOCKED_UNTIL = 6; // enough calls to shrink 1000 -> the 20-char floor
+
+            function fetchMock(url, options) {{
+              const body = JSON.parse(options.body);
+              requestSizes.push(body.chunk_text.length);
+              callCount += 1;
+              if (callCount <= BLOCKED_UNTIL) {{
+                return Promise.resolve({{
+                  ok: true, status: 200,
+                  headers: {{ get: () => "text/html" }},
+                  text: async () => "<html>blocked</html>",
+                }});
+              }}
+              const responseBody = body.is_final
+                ? {{ completed: true, screenplay_text: "irrelevant", import_run_id: 1 }}
+                : {{ completed: false, upload_id: body.upload_id, received_chars: 0 }};
+              return Promise.resolve({{
+                ok: true, status: 200,
+                headers: {{ get: () => "application/json" }},
+                text: async () => JSON.stringify(responseBody),
+              }});
+            }}
+
+            const fakeElement = {{ innerHTML: "", style: {{}}, appendChild() {{}} }};
+            const context = vm.createContext({{
+              fetch: fetchMock,
+              setTimeout,
+              console,
+              document: {{
+                getElementById: () => fakeElement,
+                createElement: () => ({{ style: {{}} }}),
+              }},
+              window: undefined,
+              localStorage: {{ getItem: () => null, setItem: () => {{}} }},
+            }});
+            vm.runInContext(safeApiSource, context);
+            vm.runInContext(uiSource, context);
+
+            const text = "x".repeat(60000);
+            const runner = vm.runInContext(
+              "(text, opts) => uploadScreenplayInChunks(text, opts)", context,
+            );
+            runner(text, {{
+              projectId: 1, sourceType: "paste", sourceFilename: "", importRunId: null, force: false,
+              onProgress: () => {{}},
+            }}).then(() => {{
+              console.log(JSON.stringify(requestSizes));
+            }}).catch((error) => {{
+              console.error("UPLOAD_FAILED: " + error.message + " code=" + error.code);
+              process.exit(1);
+            }});
+            """
+        )
+        completed = subprocess.run(
+            ["node", "-e", script], capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        sizes = json.loads(completed.stdout.strip())
+
+        # Halves on every blocked attempt, down to the 20-char floor.
+        self.assertEqual(sizes[:6], [1000, 500, 250, 125, 62, 31])
+
+        recovered = sizes[6:]
+        # Recovers at the floor first — no jumping straight back to full size.
+        self.assertEqual(recovered[:5], [20, 20, 20, 20, 20])
+        # But it does climb back to the starting size once the block has
+        # cleared, rather than staying at 20 chars/request for the rest of
+        # a full-length screenplay.
+        self.assertIn(1000, recovered)
+
 
 if __name__ == "__main__":
     unittest.main()
