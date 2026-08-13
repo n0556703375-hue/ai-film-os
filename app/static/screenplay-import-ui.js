@@ -181,14 +181,56 @@ function sceneCard(scene, { expanded = false } = {}) {
     </details>`;
 }
 
-function entityCard(entity, label) {
+function entityCard(entity, label, entityType) {
   const aliases = (entity.aliases || []).filter((a) => a !== entity.canonical_name);
   return `
-    <div class="card" style="margin-bottom:8px">
+    <div class="card entity-card" style="margin-bottom:8px" data-entity-type="${entityType}" data-original-name="${escapeHtml(entity.canonical_name)}">
       <b>${escapeHtml(entity.canonical_name)}</b>
       ${aliases.length ? `<span class="meta"> · גם: ${aliases.map(escapeHtml).join(", ")}</span>` : ""}
       <p class="meta">${label} ראשון: סצנה ${entity.first_appearance_scene_number}</p>
+      <div class="row" style="margin-top:6px">
+        <input class="entity-rename-input" type="text" value="${escapeHtml(entity.canonical_name)}" style="flex:1">
+        <button class="secondary entity-rename-button" type="button">שינוי שם</button>
+        <button class="secondary issue-high entity-delete-button" type="button">מחיקה</button>
+      </div>
     </div>`;
+}
+
+function wireEntityCardControls() {
+  document.querySelectorAll(".entity-card").forEach((card) => {
+    const entityType = card.dataset.entityType;
+    const originalName = card.dataset.originalName;
+    card.querySelector(".entity-rename-button").onclick = async () => {
+      const newName = card.querySelector(".entity-rename-input").value.trim();
+      if (!newName || newName === originalName) return;
+      await withEntityEditBusy(card, async () => {
+        state.run = await apiCall(
+          `/api/screenplay-imports/${state.run.id}/entities/${entityType}/rename`,
+          { method: "POST", body: JSON.stringify({ canonical_name: originalName, new_name: newName }) },
+        );
+      });
+    };
+    card.querySelector(".entity-delete-button").onclick = async () => {
+      if (!confirm(`למחוק את "${originalName}" מהפירוק?`)) return;
+      await withEntityEditBusy(card, async () => {
+        state.run = await apiCall(
+          `/api/screenplay-imports/${state.run.id}/entities/${entityType}/delete`,
+          { method: "POST", body: JSON.stringify({ canonical_name: originalName }) },
+        );
+      });
+    };
+  });
+}
+
+async function withEntityEditBusy(card, action) {
+  card.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+  try {
+    await action();
+    state.errorMessage = null;
+  } catch (error) {
+    state.errorMessage = error && error.message ? error.message : "העדכון נכשל.";
+  }
+  renderPreview();
 }
 
 function warningsHtml(warnings) {
@@ -349,11 +391,11 @@ function renderPreview() {
       <div class="section-toolbar" style="margin-top:16px"><h3>סצנות (לפי סדר מקורי)</h3></div>
       ${run.scenes.map((s) => sceneCard(s)).join("")}
       <div class="section-toolbar"><h3>דמויות</h3></div>
-      ${run.characters.map((c) => entityCard(c, "הופעה")).join("") || '<p class="meta">לא זוהו דמויות.</p>'}
+      ${run.characters.map((c) => entityCard(c, "הופעה", "characters")).join("") || '<p class="meta">לא זוהו דמויות.</p>'}
       <div class="section-toolbar"><h3>לוקיישנים</h3></div>
-      ${run.locations.map((l) => entityCard(l, "הופעה")).join("") || '<p class="meta">לא זוהו לוקיישנים.</p>'}
+      ${run.locations.map((l) => entityCard(l, "הופעה", "locations")).join("") || '<p class="meta">לא זוהו לוקיישנים.</p>'}
       <div class="section-toolbar"><h3>אביזרים</h3></div>
-      ${run.props.map((p) => entityCard(p, "הופעה")).join("") || '<p class="meta">לא זוהו אביזרים מסומנים במרכאות.</p>'}
+      ${run.props.map((p) => entityCard(p, "הופעה", "props")).join("") || '<p class="meta">לא זוהו אביזרים מסומנים במרכאות.</p>'}
       <div class="row" style="margin-top:16px">
         <button id="reviewButton">השוואה מול הפרויקט ואישור</button>
         ${editing ? "" : '<button class="secondary" id="editButton">עריכת התסריט וניתוח מחדש</button>'}
@@ -368,6 +410,7 @@ function renderPreview() {
   } else {
     $("editButton").onclick = () => { state.editingText = true; renderPreview(); };
   }
+  wireEntityCardControls();
 }
 
 async function onReparseClicked() {

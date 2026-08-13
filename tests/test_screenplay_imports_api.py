@@ -147,6 +147,70 @@ class ReparseApiTests(ScreenplayImportsApiTestCase):
         self.assertEqual(ctx.exception.status_code, 409)
 
 
+class EntityEditApiTests(ScreenplayImportsApiTestCase):
+    def test_rename_location_returns_updated_preview(self):
+        run = api.create_import_run(
+            api.CreateImportRunRequest(project_id=self.project["id"], screenplay_text=_TWO_SCENES)
+        )
+        updated = api.rename_import_run_entity(
+            run["id"], "locations",
+            api.RenameEntityRequest(canonical_name="HOUSE", new_name="MAIN HOUSE"),
+        )
+        names = sorted(loc["canonical_name"] for loc in updated["locations"])
+        self.assertEqual(names, ["MAIN HOUSE", "YARD"])
+
+    def test_rename_unknown_entity_type_is_404(self):
+        run = api.create_import_run(
+            api.CreateImportRunRequest(project_id=self.project["id"], screenplay_text=_TWO_SCENES)
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            api.rename_import_run_entity(
+                run["id"], "unknown_type",
+                api.RenameEntityRequest(canonical_name="HOUSE", new_name="MAIN HOUSE"),
+            )
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_rename_unknown_run_is_404(self):
+        with self.assertRaises(HTTPException) as ctx:
+            api.rename_import_run_entity(
+                999999, "locations",
+                api.RenameEntityRequest(canonical_name="HOUSE", new_name="MAIN HOUSE"),
+            )
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_rename_after_approval_is_409(self):
+        run = api.create_import_run(
+            api.CreateImportRunRequest(project_id=self.project["id"], screenplay_text=_TWO_SCENES)
+        )
+        api.approve_import_run(run["id"], api.ApproveRequest())
+        with self.assertRaises(HTTPException) as ctx:
+            api.rename_import_run_entity(
+                run["id"], "locations",
+                api.RenameEntityRequest(canonical_name="HOUSE", new_name="MAIN HOUSE"),
+            )
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_delete_prop_returns_updated_preview(self):
+        text = "1. INT. HOUSE - DAY\n\nHe grabs the \"letter\".\n\nJOHN\nHi.\n"
+        run = api.create_import_run(
+            api.CreateImportRunRequest(project_id=self.project["id"], screenplay_text=text)
+        )
+        updated = api.delete_import_run_entity(
+            run["id"], "props", api.DeleteEntityRequest(canonical_name="letter"),
+        )
+        self.assertEqual(updated["props"], [])
+
+    def test_delete_unknown_entity_is_404(self):
+        run = api.create_import_run(
+            api.CreateImportRunRequest(project_id=self.project["id"], screenplay_text=_TWO_SCENES)
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            api.delete_import_run_entity(
+                run["id"], "locations", api.DeleteEntityRequest(canonical_name="NOWHERE"),
+            )
+        self.assertEqual(ctx.exception.status_code, 404)
+
+
 class DiffApiTests(ScreenplayImportsApiTestCase):
     def test_diff_unknown_run_is_404(self):
         with self.assertRaises(HTTPException) as ctx:

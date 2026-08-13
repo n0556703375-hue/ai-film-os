@@ -9,6 +9,8 @@ smoke-tested flow). This router is the new deterministic-parser flow:
   GET    /api/screenplay-imports?project_id=..   -> list a project's import runs
   GET    /api/screenplay-imports/{id}            -> fetch one run's full structured preview
   POST   /api/screenplay-imports/{id}/reparse    -> re-parse (optionally with edited text)
+  POST   /api/screenplay-imports/{id}/entities/{type}/rename -> rename/merge a character/location/prop
+  POST   /api/screenplay-imports/{id}/entities/{type}/delete -> remove a character/location/prop
   GET    /api/screenplay-imports/{id}/diff       -> preview vs. the project's current scenes
   POST   /api/screenplay-imports/{id}/approve    -> atomically commit to production tables
 
@@ -83,6 +85,15 @@ class ReparseRequest(BaseModel):
 
 class ApproveRequest(BaseModel):
     confirm: bool = False
+
+
+class RenameEntityRequest(BaseModel):
+    canonical_name: str = Field(min_length=1, max_length=300)
+    new_name: str = Field(min_length=1, max_length=300)
+
+
+class DeleteEntityRequest(BaseModel):
+    canonical_name: str = Field(min_length=1, max_length=300)
 
 
 class UploadChunkRequest(BaseModel):
@@ -285,6 +296,51 @@ def reparse_import_run(import_run_id: int, request: ReparseRequest):
         raise HTTPException(409, "ריצת הייבוא כבר אושרה ולא ניתן לערוך אותה.") from exc
     except import_service.ScreenplayImportError as exc:
         raise _error_response(exc.category) from exc
+    return _serialize_run_detail(run)
+
+
+@router.post(
+    "/{import_run_id}/entities/{entity_type}/rename",
+    summary="Rename (or merge) one character/location/prop in an editable import run's preview",
+    description=(
+        "Only valid while the run is still review_required/draft. Renaming "
+        "a character keeps the old name as an alias so scene dialogue "
+        "recorded under it still resolves correctly at approval time. If "
+        "new_name collides with another entity of the same type, the two "
+        "are merged instead of producing a duplicate."
+    ),
+)
+def rename_import_run_entity(import_run_id: int, entity_type: str, request: RenameEntityRequest):
+    if entity_type not in import_service.ENTITY_TYPES:
+        raise HTTPException(404, "סוג ישות לא מוכר.")
+    try:
+        run = import_service.rename_entity(
+            import_run_id, entity_type, request.canonical_name, request.new_name
+        )
+    except import_service.ImportRunNotFound as exc:
+        raise HTTPException(404, "ריצת הייבוא לא נמצאה.") from exc
+    except import_service.ImportRunNotEditable as exc:
+        raise HTTPException(409, "ריצת הייבוא כבר אושרה ולא ניתן לערוך אותה.") from exc
+    except import_service.EntityNotFound as exc:
+        raise HTTPException(404, "הישות המבוקשת לא נמצאה בפירוק.") from exc
+    return _serialize_run_detail(run)
+
+
+@router.post(
+    "/{import_run_id}/entities/{entity_type}/delete",
+    summary="Remove one character/location/prop from an editable import run's preview",
+)
+def delete_import_run_entity(import_run_id: int, entity_type: str, request: DeleteEntityRequest):
+    if entity_type not in import_service.ENTITY_TYPES:
+        raise HTTPException(404, "סוג ישות לא מוכר.")
+    try:
+        run = import_service.delete_entity(import_run_id, entity_type, request.canonical_name)
+    except import_service.ImportRunNotFound as exc:
+        raise HTTPException(404, "ריצת הייבוא לא נמצאה.") from exc
+    except import_service.ImportRunNotEditable as exc:
+        raise HTTPException(409, "ריצת הייבוא כבר אושרה ולא ניתן לערוך אותה.") from exc
+    except import_service.EntityNotFound as exc:
+        raise HTTPException(404, "הישות המבוקשת לא נמצאה בפירוק.") from exc
     return _serialize_run_detail(run)
 
 

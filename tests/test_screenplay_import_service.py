@@ -181,6 +181,87 @@ class StoryBibleSyncTests(ScreenplayImportServiceTestCase):
         self.assertEqual(len(locations), 1)
 
 
+class RenameEntityTests(ScreenplayImportServiceTestCase):
+    """Manual correction of the parsed character/location/prop list before
+    approval — the fix for the reported gap where a mis-parsed entity name
+    could only be fixed by editing the raw screenplay text and re-parsing.
+    """
+
+    def test_rename_location_updates_breakdown_and_count(self):
+        run = svc.create_import_run(self.project["id"], _TWO_SCENES)
+        updated = svc.rename_entity(run["id"], "locations", "HOUSE", "MAIN HOUSE")
+
+        names = sorted(loc["canonical_name"] for loc in updated["breakdown"]["locations"])
+        self.assertEqual(names, ["MAIN HOUSE", "YARD"])
+        self.assertEqual(updated["location_count"], 2)
+
+    def test_rename_character_keeps_old_name_as_alias(self):
+        run = svc.create_import_run(self.project["id"], _TWO_SCENES)
+        updated = svc.rename_entity(run["id"], "characters", "JOHN", "JOHNATHAN")
+
+        renamed = next(c for c in updated["breakdown"]["characters"] if c["canonical_name"] == "JOHNATHAN")
+        self.assertIn("JOHN", renamed["aliases"])
+
+    def test_renamed_character_scene_link_still_resolves_at_approval(self):
+        run = svc.create_import_run(self.project["id"], _TWO_SCENES)
+        svc.rename_entity(run["id"], "characters", "JOHN", "JOHNATHAN")
+        svc.approve_import_run(run["id"])
+
+        characters = screenplay_structure.list_screenplay_characters(self.project["id"])
+        self.assertEqual(sorted(c["canonical_name"] for c in characters), ["JOHNATHAN", "MARY"])
+        scenes = scene_repo.list_scenes(self.project["id"])
+        house_scene = next(s for s in scenes if s["normalized_heading"] == "INT. HOUSE - DAY")
+        blocks = screenplay_structure.list_scene_content_blocks(house_scene["id"])
+        self.assertEqual(blocks[0]["character_name"], "JOHN")  # raw cue text untouched
+
+    def test_rename_onto_an_existing_name_merges_the_two_entities(self):
+        text = (
+            "1. INT. HOUSE - DAY\n\nJOHN\nHi.\n\n"
+            "2. INT. MANSION - DAY\n\nMARY\nHello.\n"
+        )
+        run = svc.create_import_run(self.project["id"], text)
+        updated = svc.rename_entity(run["id"], "locations", "MANSION", "HOUSE")
+
+        locations = updated["breakdown"]["locations"]
+        self.assertEqual([loc["canonical_name"] for loc in locations], ["HOUSE"])
+        self.assertIn("MANSION", locations[0]["aliases"])
+        self.assertEqual(updated["location_count"], 1)
+
+    def test_rename_unknown_entity_raises(self):
+        run = svc.create_import_run(self.project["id"], _TWO_SCENES)
+        with self.assertRaises(svc.EntityNotFound):
+            svc.rename_entity(run["id"], "locations", "NOWHERE", "SOMEWHERE")
+
+    def test_rename_after_approval_is_rejected(self):
+        run = svc.create_import_run(self.project["id"], _TWO_SCENES)
+        svc.approve_import_run(run["id"])
+        with self.assertRaises(svc.ImportRunNotEditable):
+            svc.rename_entity(run["id"], "locations", "HOUSE", "MAIN HOUSE")
+
+
+class DeleteEntityTests(ScreenplayImportServiceTestCase):
+    def test_delete_prop_removes_it_from_breakdown(self):
+        run = svc.create_import_run(self.project["id"], _SCENE_WITH_PROP)
+        updated = svc.delete_entity(run["id"], "props", "letter")
+
+        self.assertEqual(updated["breakdown"]["props"], [])
+        self.assertEqual(updated["prop_count"], 0)
+
+    def test_deleted_character_does_not_block_approval(self):
+        run = svc.create_import_run(self.project["id"], _TWO_SCENES)
+        svc.delete_entity(run["id"], "characters", "JOHN")
+        result = svc.approve_import_run(run["id"])
+
+        self.assertEqual(result["characters_created"], 1)
+        characters = screenplay_structure.list_screenplay_characters(self.project["id"])
+        self.assertEqual([c["canonical_name"] for c in characters], ["MARY"])
+
+    def test_delete_unknown_entity_raises(self):
+        run = svc.create_import_run(self.project["id"], _TWO_SCENES)
+        with self.assertRaises(svc.EntityNotFound):
+            svc.delete_entity(run["id"], "locations", "NOWHERE")
+
+
 class ReimportSafetyTests(ScreenplayImportServiceTestCase):
     def _approve(self, text):
         run = svc.create_import_run(self.project["id"], text)
