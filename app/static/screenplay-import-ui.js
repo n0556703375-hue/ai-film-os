@@ -43,10 +43,24 @@ async function apiCall(url, options = {}) {
 // concern: the server only ever parses the fully reassembled text in one
 // call (app/services/chunked_screenplay_upload.py), so none of this
 // changes how the screenplay is understood.
+//
+// The shrink must not be permanent. A follow-up production trace (a real
+// upload stuck at 1% for dozens of requests, each confirmed via its
+// response headers to be a genuine backend ack, not a block page) showed
+// why: once one early chunk got blocked, the size collapsed to the floor
+// and *stayed there* for the rest of the screenplay, so a normal-length
+// script needs thousands of 20-character round trips to finish — both
+// glacially slow and fragile, since exhausting the small floor-retry
+// budget on any later, unrelated hiccup aborts the whole upload with no
+// way to resume. So after a streak of successes at a shrunk size, the
+// size is grown back up (capped at the starting size) and tried again —
+// if the block was transient it stays fast; if it wasn't, the very next
+// failure shrinks it right back down.
 const UPLOAD_CHUNK_START_CHARS = 1000;
 const UPLOAD_CHUNK_MIN_CHARS = 20;
 const UPLOAD_RETRY_DELAY_MS = 400;
 const UPLOAD_MAX_FLOOR_RETRIES = 4;
+const UPLOAD_GROWTH_SUCCESS_STREAK = 5;
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -71,6 +85,7 @@ async function uploadScreenplayInChunks(text, { projectId, sourceType, sourceFil
   let offset = 0;
   let chunkSize = UPLOAD_CHUNK_START_CHARS;
   let floorRetries = 0;
+  let successStreak = 0;
   let result = null;
 
   do {
@@ -97,6 +112,7 @@ async function uploadScreenplayInChunks(text, { projectId, sourceType, sourceFil
       if (NETWORK_FILTER_ERROR_CODES.has(error && error.code)) {
         if (chunkSize > UPLOAD_CHUNK_MIN_CHARS) {
           chunkSize = Math.max(UPLOAD_CHUNK_MIN_CHARS, Math.floor(chunkSize / 2));
+          successStreak = 0; // a fresh streak at the new size is what earns the next growth
           await delay(UPLOAD_RETRY_DELAY_MS);
           continue; // retry the same offset at a smaller size, after a short pause
         }
@@ -114,6 +130,11 @@ async function uploadScreenplayInChunks(text, { projectId, sourceType, sourceFil
 
     offset += size;
     floorRetries = 0;
+    successStreak += 1;
+    if (chunkSize < UPLOAD_CHUNK_START_CHARS && successStreak >= UPLOAD_GROWTH_SUCCESS_STREAK) {
+      chunkSize = Math.min(UPLOAD_CHUNK_START_CHARS, chunkSize * 2);
+      successStreak = 0;
+    }
     if (onProgress) onProgress(offset, totalChars);
   } while (offset < text.length);
 
