@@ -63,6 +63,21 @@ class ScreenplayImportError(ValueError):
         super().__init__(category)
 
 
+ENTITY_TYPES = ("characters", "locations", "props")
+_ENTITY_COUNT_FIELD = {
+    "characters": "character_count",
+    "locations": "location_count",
+    "props": "prop_count",
+}
+
+
+class EntityNotFound(ValueError):
+    def __init__(self, entity_type: str, canonical_name: str):
+        self.entity_type = entity_type
+        self.canonical_name = canonical_name
+        super().__init__(f"{entity_type} entity {canonical_name!r} not found")
+
+
 def _hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -143,6 +158,97 @@ def reparse_import_run(import_run_id: int, screenplay_text: str | None = None) -
         "location_count": len(breakdown["locations"]),
         "prop_count": len(breakdown["props"]),
         "status": "review_required",
+    })
+
+
+def _require_editable_run(import_run_id: int) -> dict:
+    run = import_runs_repo.get_import_run(import_run_id)
+    if not run:
+        raise ImportRunNotFound(import_run_id)
+    if run["status"] not in _ACTIVE_STATUSES:
+        raise ImportRunNotEditable(import_run_id, run["status"])
+    return run
+
+
+def rename_entity(import_run_id: int, entity_type: str, canonical_name: str, new_name: str) -> dict:
+    """Rename (or merge) one character/location/prop in a not-yet-approved
+    breakdown, before it's committed to production tables.
+
+    Renaming a character preserves the old canonical name as an alias, so
+    scene participants/dialogue blocks recorded under the old name (raw cue
+    text, never rewritten by this function) still resolve to the renamed
+    entity at approval time via the existing alias lookup in
+    app.repositories.screenplay_structure.commit_breakdown. Locations and
+    props have no such back-references — scenes store their own heading
+    text independently — so renaming them only ever touches the entity list.
+
+    If ``new_name`` collides with another entity of the same type, the two
+    are merged (aliases unioned, earliest first-appearance kept) rather than
+    producing two entities with the same canonical_name.
+    """
+    if entity_type not in ENTITY_TYPES:
+        raise ValueError(f"unknown entity_type: {entity_type!r}")
+    new_name = new_name.strip()
+    if not new_name:
+        raise ValueError("new_name must not be empty")
+
+    run = _require_editable_run(import_run_id)
+    entities = list(run["breakdown"].get(entity_type, []))
+    target = next((e for e in entities if e["canonical_name"] == canonical_name), None)
+    if target is None:
+        raise EntityNotFound(entity_type, canonical_name)
+
+    if new_name == canonical_name:
+        return run
+
+    remaining = [e for e in entities if e is not target]
+    merge_target = next((e for e in remaining if e["canonical_name"] == new_name), None)
+    carried_aliases = set(target.get("aliases", [])) | {canonical_name}
+
+    if merge_target:
+        merge_target["aliases"] = sorted(
+            (set(merge_target.get("aliases", [])) | carried_aliases) - {new_name}
+        )
+        merge_target["first_appearance_scene_number"] = min(
+            merge_target["first_appearance_scene_number"],
+            target["first_appearance_scene_number"],
+        )
+        new_entities = remaining
+    else:
+        target["canonical_name"] = new_name
+        target["aliases"] = sorted(carried_aliases - {new_name})
+        new_entities = remaining + [target]
+
+    new_entities.sort(key=lambda e: e["canonical_name"])
+    breakdown = dict(run["breakdown"])
+    breakdown[entity_type] = new_entities
+    return import_runs_repo.update_import_run(import_run_id, {
+        "breakdown": breakdown,
+        _ENTITY_COUNT_FIELD[entity_type]: len(new_entities),
+    })
+
+
+def delete_entity(import_run_id: int, entity_type: str, canonical_name: str) -> dict:
+    """Remove one character/location/prop from a not-yet-approved breakdown.
+
+    A deleted character's scene participants simply won't resolve to a
+    screenplay_character at approval time (the same "no match" path that
+    already handles an unrecognized raw name) — no scene data is touched.
+    """
+    if entity_type not in ENTITY_TYPES:
+        raise ValueError(f"unknown entity_type: {entity_type!r}")
+
+    run = _require_editable_run(import_run_id)
+    entities = run["breakdown"].get(entity_type, [])
+    if not any(e["canonical_name"] == canonical_name for e in entities):
+        raise EntityNotFound(entity_type, canonical_name)
+
+    new_entities = [e for e in entities if e["canonical_name"] != canonical_name]
+    breakdown = dict(run["breakdown"])
+    breakdown[entity_type] = new_entities
+    return import_runs_repo.update_import_run(import_run_id, {
+        "breakdown": breakdown,
+        _ENTITY_COUNT_FIELD[entity_type]: len(new_entities),
     })
 
 
