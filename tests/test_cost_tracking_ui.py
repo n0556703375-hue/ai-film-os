@@ -32,6 +32,17 @@ class CostTrackingUiTests(unittest.TestCase):
         self.assertIn('formatSignedUsd', script)
         self.assertIn('data-cost-summary', script)
 
+    def test_cost_dashboard_surfaces_the_project_cost_projection(self):
+        # A brand-new project has zero real media_jobs, so estimated_cost_usd
+        # is always $0 there — the projection (shot_count x provider rate)
+        # is what gives a new project a meaningful number before anything
+        # has actually been generated.
+        script = (ROOT / "app" / "static" / "cost-tracking-ui.js").read_text(encoding="utf-8")
+
+        self.assertIn('projected_total_cost_usd', script)
+        self.assertIn('projected_shot_cost_usd', script)
+        self.assertIn('shot_count', script)
+
 
 if __name__ == "__main__":
     unittest.main()

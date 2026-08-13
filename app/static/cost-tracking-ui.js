@@ -32,13 +32,29 @@ async function renderProjectCostSummary() {
       <span class="badge">${Number(summary.job_count || 0)} משימות</span>
     </div>
     <div class="grid">
-      <div class="card"><div class="meta">עלות משוערת</div><div class="stat">${formatUsd(summary.estimated_cost_usd)}</div></div>
+      <div class="card"><div class="meta">עלות משוערת (משימות שנוצרו)</div><div class="stat">${formatUsd(summary.estimated_cost_usd)}</div></div>
       <div class="card"><div class="meta">עלות בפועל</div><div class="stat">${formatUsd(summary.actual_cost_usd)}</div></div>
       <div class="card"><div class="meta">פער</div><div class="stat">${formatSignedUsd(variance)}</div></div>
       <div class="card"><div class="meta">פעילות</div><div class="stat">${active}</div><div class="meta">${completed} הושלמו · ${failed} נכשלו</div></div>
     </div>
+    ${renderProjectedCost(summary)}
     ${renderRecentCostJobs(jobs.slice(0, 5))}`;
   dashboard.appendChild(section);
+}
+
+function renderProjectedCost(summary) {
+  const shotCount = Number(summary.shot_count || 0);
+  if (!shotCount) return "";
+  const perShot = Number(summary.projected_shot_cost_usd || 0);
+  if (!perShot) {
+    return `<p class="meta">אין ספק וידאו מוגדר כרגע, כך שלא ניתן להעריך עלות לפרויקט.</p>`;
+  }
+  return `
+    <div class="card" style="margin-top:14px">
+      <div class="meta">תחזית עלות לכל הפרויקט (${shotCount} שוטים × ${formatUsd(perShot)} לשוט, בהנחת 5 שניות וידאו לשוט)</div>
+      <div class="stat">${formatUsd(summary.projected_total_cost_usd)}</div>
+      <div class="meta">הערכה גסה בלבד לפי מחיר ספק הווידאו הנוכחי — אינה כוללת עלויות תמונה, ואינה מחליפה את "עלות משוערת" שמעל, שמשקפת משימות שכבר נוצרו בפועל.</div>
+    </div>`;
 }
 
 function renderRecentCostJobs(jobs) {
