@@ -20,10 +20,21 @@ function withProject(url) {
 async function api(url, options = {}) {
   const method = (options.method || "GET").toUpperCase();
   const finalUrl = method === "GET" ? withProject(url) : url;
-  const response = await fetch(finalUrl, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+  let response;
+  try {
+    response = await fetch(finalUrl, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+  } catch (_error) {
+    // A network-level failure (server unreachable, connection reset, a
+    // cold-starting deploy) rejects fetch() itself before there's any
+    // response to parse — safe-api-response.js only ever sees a response
+    // it can safely re-read, so this is the one path it can't cover. Left
+    // unhandled, the browser's own "Failed to fetch" (in English) leaks
+    // straight into an otherwise all-Hebrew UI.
+    throw new Error("לא ניתן להגיע לשרת. בדקי את החיבור ונסי שוב.");
+  }
   const data = await response.json();
   if (!response.ok) throw new Error(data.detail || "שגיאה");
   return data;
