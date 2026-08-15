@@ -9,11 +9,14 @@ async function openAsset(id) {
   const lockLabel = LOCK_LABELS[asset.lock_status] || asset.lock_status || "טיוטה";
   const references = asset.reference_images || [];
   const lockTitle = isCharacter ? "Character Lock" : asset.asset_type === "לוקיישן" ? "Location Lock" : "Wardrobe Lock";
+  const bibleAutofillAvailable = isCharacter || asset.asset_type === "לוקיישן";
+  const hasBibleContent = Boolean(asset.description || asset.visual_rules || asset.master_prompt || asset.negative_prompt);
 
   show(`<div class="meta">${esc(asset.asset_type)} · גרסה ${asset.version}</div>
   <div class="row"><h2>${esc(asset.name)}</h2>${isLockable ? `<span class="badge ${isLocked ? "approved" : ""}">${lockTitle}: ${esc(lockLabel)}</span>` : ""}</div>
   <div class="workspace-grid"><div class="workspace-section">
   ${isLocked ? `<div class="card"><b>הנכס נעול</b><p class="meta">שדות ה־Master והרפרנס הראשי מוגנים משינוי עד לפתיחת הנעילה.</p></div>` : ""}
+  ${bibleAutofillAvailable && !isLocked ? `<div class="section-toolbar"><h3>Story Bible</h3><button class="secondary" onclick="generateAssetBible(${asset.id}, ${hasBibleContent})">מלא אוטומטית עם AI</button></div>` : ""}
   <label>סוג</label><select id="asType" ${isLocked ? "disabled" : ""}>${["דמות","לוקיישן","אביזר","לבוש","כלל","סגנון"].map((t)=>`<option ${t===asset.asset_type?"selected":""}>${t}</option>`).join("")}</select>
   <label>שם</label><input id="asName" value="${esc(asset.name)}"><label>תיאור</label><textarea id="asDescription">${esc(asset.description)}</textarea>
   <label>כללים חזותיים ורציפות</label><textarea id="asRules" ${isLocked ? "disabled" : ""}>${esc(asset.visual_rules)}</textarea>
