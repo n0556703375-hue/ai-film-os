@@ -519,8 +519,11 @@ async function createAsset() {
 }
 async function openAsset(id) {
   const asset=await api(`/api/assets/${id}`);
+  const bibleAutofillAvailable = asset.asset_type==="דמות"||asset.asset_type==="לוקיישן";
+  const hasBibleContent = Boolean(asset.description||asset.visual_rules||asset.master_prompt||asset.negative_prompt);
   show(`<div class="meta">${esc(asset.asset_type)} · גרסה ${asset.version}</div><h2>${esc(asset.name)}</h2>
   <div class="workspace-grid"><div class="workspace-section">
+  ${bibleAutofillAvailable?`<div class="section-toolbar"><h3>Story Bible</h3><button class="secondary" onclick="generateAssetBible(${asset.id}, ${hasBibleContent})">מלא אוטומטית עם AI</button></div>`:""}
   <label>סוג</label><select id="asType">${["דמות","לוקיישן","אביזר","לבוש","כלל","סגנון"].map((t)=>`<option ${t===asset.asset_type?"selected":""}>${t}</option>`).join("")}</select>
   <label>שם</label><input id="asName" value="${esc(asset.name)}"><label>תיאור</label><textarea id="asDescription">${esc(asset.description)}</textarea>
   <label>כללים חזותיים ורציפות</label><textarea id="asRules">${esc(asset.visual_rules)}</textarea>
@@ -568,6 +571,14 @@ async function waitForCharacterReference(assetId, taskId, viewType) {
     } catch(error){showError(error);return;}
   }
   show(`<h2>הרפרנס עדיין בתהליך</h2><button onclick="openAsset(${assetId})">חזרה לדמות</button>`);
+}
+async function generateAssetBible(assetId, hasExistingContent) {
+  if (hasExistingContent && !confirm("שדות ה-Story Bible כבר מכילים תוכן. להחליף אותו בתוכן שנוצר על ידי AI?")) return;
+  show("<h2>ממלא Story Bible</h2><p>OpenAI מנסח תיאור, כללים חזותיים ופרומפטים…</p>");
+  try {
+    await api(`/api/assets/${assetId}/generate-bible`, {method:"POST"});
+    await openAsset(assetId);
+  } catch (error) { showError(error); }
 }
 async function saveAsset(id) {
   const payload={asset_type:$("asType").value,name:$("asName").value,description:$("asDescription").value,
