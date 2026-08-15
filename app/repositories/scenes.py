@@ -4,6 +4,27 @@ from app.database.connection import get_connection
 from app.database.query import execute_query
 
 
+def _valid_asset_ids(raw_ids, valid_assets: set[int]) -> list[int]:
+    """Coerce a shot's asset_ids to known-good ints, dropping anything else.
+
+    ``raw_ids`` comes from an AI-generated shot map (app.services.shot_map)
+    that trusts an LLM's JSON output — a hallucinated reference like
+    "LOCATION_BACKSTAGE_001" instead of the catalog's real numeric id must
+    never be able to crash the whole import with a raw ValueError; it's
+    just an asset link that didn't resolve, exactly like a numeric id the
+    LLM invented that isn't in ``valid_assets``.
+    """
+    ids = []
+    for raw in raw_ids:
+        try:
+            asset_id = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if asset_id in valid_assets:
+            ids.append(asset_id)
+    return ids
+
+
 def create_generated_shots(scene_id: int, shots: list[dict], replace_existing: bool = False):
     allowed = {"title", "shot_type", "duration_seconds", "action", "camera", "camera_angle",
                "composition", "lens", "lighting", "movement", "mood", "color_palette", "dialogue"}
@@ -27,7 +48,7 @@ def create_generated_shots(scene_id: int, shots: list[dict], replace_existing: b
             names = ",".join(fields)
             cur = conn.execute(f"INSERT INTO shots ({names}) VALUES ({','.join('?' for _ in fields)})",
                                list(fields.values()))
-            ids = [int(v) for v in shot.get("asset_ids", []) if int(v) in valid_assets]
+            ids = _valid_asset_ids(shot.get("asset_ids", []), valid_assets)
             conn.executemany("INSERT OR IGNORE INTO shot_assets (shot_id,asset_id) VALUES (?,?)",
                              [(cur.lastrowid, asset_id) for asset_id in ids])
         conn.commit()
