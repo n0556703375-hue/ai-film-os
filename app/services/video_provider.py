@@ -32,6 +32,9 @@ class VideoProvider(Protocol):
     def generate(self, request: VideoGenerationRequest) -> VideoGenerationResult:
         ...
 
+    def cost_for(self, request: VideoGenerationRequest) -> float:
+        ...
+
 
 class DisabledVideoProvider:
     name = "disabled"
@@ -40,6 +43,12 @@ class DisabledVideoProvider:
         raise VideoProviderNotConfigured(
             "Video provider is not configured. Select and configure a provider before running video jobs."
         )
+
+    def cost_for(self, request: VideoGenerationRequest) -> float:
+        # No provider configured means no jobs can actually run, so there is
+        # nothing to cost — never invents a number for a provider that isn't
+        # there.
+        return 0.0
 
 
 def get_video_provider() -> VideoProvider:
@@ -61,3 +70,17 @@ def get_video_provider() -> VideoProvider:
 
         return KlingProvider()
     return DisabledVideoProvider()
+
+
+DEFAULT_SHOT_DURATION_SECONDS = 5.0
+
+
+def estimate_default_shot_cost_usd(duration_seconds: float = DEFAULT_SHOT_DURATION_SECONDS) -> float:
+    """Rough per-shot cost at the currently configured provider's default
+    settings — no real image, prompt, or duration for a specific shot is
+    known yet (shots don't carry a planned duration), so this is only ever
+    used for a project-wide cost *projection* before any generation has
+    run, never for an actual job's estimated_cost_usd.
+    """
+    request = VideoGenerationRequest(image_url="", prompt="", duration_seconds=duration_seconds)
+    return get_video_provider().cost_for(request)
