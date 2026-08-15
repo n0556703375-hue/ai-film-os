@@ -3,6 +3,8 @@ from pydantic import BaseModel, Field
 from typing import Any, Literal
 
 from app.repositories import jobs as repo
+from app.repositories import shots as shots_repo
+from app.services.video_provider import estimate_default_shot_cost_usd
 from app.services.video_result_ingestion import ingest_completed_video_job
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -35,7 +37,12 @@ def list_jobs(project_id: int | None = None, shot_id: int | None = None):
 
 @router.get("/cost-summary")
 def cost_summary(project_id: int = Query(ge=1)):
-    return repo.get_cost_summary(project_id)
+    summary = repo.get_cost_summary(project_id)
+    shot_count = len(shots_repo.list_shots(project_id=project_id))
+    summary["shot_count"] = shot_count
+    summary["projected_shot_cost_usd"] = round(estimate_default_shot_cost_usd(), 4)
+    summary["projected_total_cost_usd"] = round(shot_count * summary["projected_shot_cost_usd"], 4)
+    return summary
 
 
 @router.get("/{job_id}")

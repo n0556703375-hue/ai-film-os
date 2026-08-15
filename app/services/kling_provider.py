@@ -317,3 +317,7 @@ class KlingProvider:
         if status in {"submitted", "processing"}:
             return {"status": "pending", "url": "", "reason": ""}
         raise RuntimeError("Kling החזיר סטטוס משימה לא מוכר.")
+
+    def cost_for(self, request: VideoGenerationRequest) -> float:
+        model = _model_for(request.model_profile)
+        return _estimate_cost(request.duration_seconds, model)
