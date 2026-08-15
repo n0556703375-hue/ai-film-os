@@ -2,9 +2,14 @@ import httpx
 from fastapi import APIRouter, HTTPException, Response
 from app.models.schemas import AssetCreate, AssetUpdate, AssetLockRequest, ReferenceApprovalRequest
 from app.repositories import assets as repo
+from app.repositories import projects as project_repo
+from app.services.asset_bible import generate_asset_bible
+from app.services.generation import GenerationNotConfigured
 from app.services.reference_gallery import group_approved_references
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
+
+_BIBLE_AUTOFILL_ASSET_TYPES = {"דמות", "לוקיישן"}
 
 @router.get("")
 def list_assets(project_id: int | None = None):
@@ -68,6 +73,34 @@ def update_asset(asset_id: int, update: AssetUpdate):
     if not asset:
         raise HTTPException(404, "הנכס לא נמצא.")
     return asset
+
+@router.post(
+    "/{asset_id}/generate-bible",
+    summary="Fill in a character/location asset's Story Bible fields (description, visual rules, prompts) using AI",
+    description=(
+        "Available for asset_type דמות (character) and לוקיישן (location) only. "
+        "Overwrites description/visual_rules/master_prompt/negative_prompt — the "
+        "caller is expected to warn the user before calling this on an asset that "
+        "already has content filled in. Refused (409) on a locked asset, matching "
+        "the existing rule that master fields require unlocking first."
+    ),
+)
+def generate_bible(asset_id: int):
+    asset = repo.get_asset(asset_id)
+    if not asset:
+        raise HTTPException(404, "הנכס לא נמצא.")
+    if asset["asset_type"] not in _BIBLE_AUTOFILL_ASSET_TYPES:
+        raise HTTPException(409, "מילוי אוטומטי עם AI זמין לדמויות ולוקיישנים בלבד.")
+    project = project_repo.get_project(asset["project_id"])
+    try:
+        fields = generate_asset_bible(asset, project)
+        return repo.update_asset(asset_id, fields)
+    except GenerationNotConfigured as exc:
+        raise HTTPException(503, str(exc))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    except Exception as exc:
+        raise HTTPException(502, f"מילוי אוטומטי נכשל: {exc}")
 
 @router.put("/{asset_id}/references/{reference_id}/approval")
 def approve_reference(asset_id: int, reference_id: int, request: ReferenceApprovalRequest):
