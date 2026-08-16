@@ -15,6 +15,10 @@ class VideoGenerationRequest:
     audio_mode: str = "none"
     aspect_ratio: str = "16:9"
     model_profile: str = "cinematic"
+    # Only read by LocalComfyUIProvider (app/services/providers/
+    # local_comfyui_provider.py) — every other provider ignores this field.
+    # "ltx" (LTX-2.3, produces synced audio too) or "wan" (Wan 2.2, no audio).
+    local_model: str = "wan"
 
 
 @dataclass(frozen=True)
@@ -51,15 +55,34 @@ class DisabledVideoProvider:
         return 0.0
 
 
-def get_video_provider() -> VideoProvider:
+def get_video_provider(*, draft_mode: bool = False) -> VideoProvider:
     """Return the configured video provider.
 
-    Priority:
+    draft_mode (default False, unchanged behavior for every existing caller):
+      True routes to the local ComfyUI provider instead of the normal
+      external priority list below — for fast/free local iteration before
+      committing to a paid external render. Requires COMFYUI_ENDPOINT to be
+      configured; raises VideoProviderNotConfigured otherwise rather than
+      silently falling back to an external (billed) provider, since that
+      would defeat the purpose of explicitly requesting a draft.
+
+    Normal (draft_mode=False) priority:
       1. FAL_API_KEY set → SeedanceProvider (Seedance 2.0 via fal.ai, primary)
       2. Both KLING_ACCESS_KEY and KLING_SECRET_KEY set → KlingProvider (legacy)
       3. Fallback → DisabledVideoProvider (safe no-op)
     """
     import os
+
+    if draft_mode:
+        from app.services.providers import comfyui_client
+        from app.services.providers.local_comfyui_provider import LocalComfyUIProvider
+
+        if not comfyui_client.is_configured():
+            raise VideoProviderNotConfigured(
+                "COMFYUI_ENDPOINT is not configured — draft mode requires a local "
+                "ComfyUI instance. See SETUP_NOTES.md for how to install and run one."
+            )
+        return LocalComfyUIProvider()
 
     if os.getenv("FAL_API_KEY", "").strip():
         from app.services.seedance_provider import SeedanceProvider

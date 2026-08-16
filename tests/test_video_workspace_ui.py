@@ -26,6 +26,16 @@ class VideoWorkspaceUiTests(unittest.TestCase):
         self.assertIn("controls", script)
         self.assertIn("waitForMediaJob", script)
 
+    def test_draft_mode_toggle_is_exposed_for_video_and_image(self):
+        script = Path("app/static/job-queue-ui.js").read_text(encoding="utf-8")
+
+        self.assertIn("videoDraftMode", script)
+        self.assertIn("videoDraftModel", script)
+        self.assertIn("imageDraftMode", script)
+        self.assertIn("imageDraftModel", script)
+        self.assertIn("draft_mode:", script)
+        self.assertIn("local_model:", script)
+
 
 if __name__ == "__main__":
     unittest.main()

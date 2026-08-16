@@ -129,7 +129,7 @@ class KlingWorkerResumabilityTests(unittest.TestCase):
         return job
 
     def _use_provider(self, fake):
-        worker.get_video_provider = lambda: fake
+        worker.get_video_provider = lambda **kwargs: fake
 
     # --- persistence primitive -------------------------------------------
 

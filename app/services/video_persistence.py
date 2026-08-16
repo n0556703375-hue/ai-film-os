@@ -154,7 +154,13 @@ def _stream_to_disk(response: httpx.Response, shot_id: int, content_type: str, m
     }
 
 
-def persist_remote_video(source_url: str, shot_id: int, *, max_bytes: int = MAX_VIDEO_BYTES) -> dict:
+def persist_remote_video(
+    source_url: str,
+    shot_id: int,
+    *,
+    max_bytes: int = MAX_VIDEO_BYTES,
+    allow_private_host: bool = False,
+) -> dict:
     """Download a completed provider video and store it under GENERATED_MEDIA_PATH.
 
     Never trusts a provider-supplied filename — the stored filename is
@@ -165,13 +171,25 @@ def persist_remote_video(source_url: str, shot_id: int, *, max_bytes: int = MAX_
     Raises ``VideoPersistenceError`` on any failure — the caller (the video
     job worker) must not mark the job completed and must not treat this as a
     reason to resubmit to the provider.
+
+    ``allow_private_host`` (default False, unchanged behavior for every
+    existing caller) relaxes the HTTPS-only/public-host requirement below to
+    also accept plain http and a private/loopback host. This exists solely
+    for app.services.providers.local_comfyui_provider.LocalComfyUIProvider
+    (see its ``trusted_local`` attribute and app.worker._process_video_job) —
+    a local ComfyUI instance on http://localhost is the expected, trusted
+    source there, not an anomaly. Every external provider (Kling, Seedance)
+    must still only ever hand back a genuine public HTTPS URL.
     """
     current = source_url
     for _ in range(_MAX_REDIRECTS + 1):
         parsed = urlparse(current)
-        if parsed.scheme != "https" or not parsed.hostname:
+        if not parsed.hostname:
             raise VideoPersistenceError(VideoPersistenceError.NOT_HTTPS)
-        if not _is_public_host(parsed.hostname):
+        allowed_schemes = {"https", "http"} if allow_private_host else {"https"}
+        if parsed.scheme not in allowed_schemes:
+            raise VideoPersistenceError(VideoPersistenceError.NOT_HTTPS)
+        if not allow_private_host and not _is_public_host(parsed.hostname):
             raise VideoPersistenceError(VideoPersistenceError.PRIVATE_HOST)
 
         try:

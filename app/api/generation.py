@@ -136,6 +136,8 @@ def queue_for_shot(shot_id: int, request: GenerationRequest):
         "prompt_version_id": prompt_version_id,
         "size": request.size,
         "quality": request.quality,
+        "draft_mode": request.draft_mode,
+        "local_model": request.local_model,
     }
     job, created = job_repo.enqueue_job(
         shot["project_id"],
