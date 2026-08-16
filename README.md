@@ -88,9 +88,13 @@ Kling מאמת עם זוג AccessKey/SecretKey שחותם JWT קצר־מועד (
 
 **עמידות (mirrors Kling's Gate 2 guarantee):** `SeedanceProvider.submit()` רק שולח בקשה ל-fal.ai ומחזיר מזהה — הוא **אינו** חוסם. `provider_task_id` נשמר על ה-job מיד, לפני כל polling. `check_task()` היא בדיקת סטטוס בודדת ולא חוסמת. קריסה/הפעלה מחדש של ה-worker או כישלון בר-ניסיון-חוזר ממשיכים polling על אותה בקשת fal.ai ולעולם אינם שולחים בקשה כפולה (ומחויבת בנפרד). כישלונות מדווחים כקטגוריה יציבה ובטוחה (`SeedanceErrorCategory` — למשל `authentication_failed`, `source_image_unreachable`, `moderation_rejected`) ולא כטקסט חופשי מהספק; קטגוריות מסוימות (auth, moderation, קלט לא תקין) מסומנות non-retryable ולא צורכות ניסיונות חוזרים לשווא.
 
-**⚠️ חוסם שחרור (release blocker) — אחסון מדיה שהועלתה:** ל-Render free tier **אין** אפשרות דיסק מתמיד כלל (persistent disk דורש תוכנית בתשלום, Starter ומעלה). קובץ שנשמר תחת `GENERATED_MEDIA_PATH` (ברירת מחדל: תיקייה בתוך קוד האפליקציה עצמו) **נמחק בכל deploy/restart**, בעוד השורה ב-media_results ממשיכה להצביע עליו — כלומר וידאו/תמונה שהועלו יעלמו מבלי אזהרה. שתי אופציות אמיתיות בלבד:
+**✅ פתרון לחוסם השחרור — אחסון מדיה חיצוני (S3-compatible):** ל-Render free tier **אין** אפשרות דיסק מתמיד כלל (persistent disk דורש תוכנית בתשלום, Starter ומעלה). קובץ שנשמר תחת `GENERATED_MEDIA_PATH` (ברירת מחדל: תיקייה בתוך קוד האפליקציה עצמו) **נמחק בכל deploy/restart**, בעוד השורה ב-media_results ממשיכה להצביע עליו — כלומר וידאו/תמונה שהועלו יעלמו מבלי אזהרה, אלא אם מוגדר אחסון חיצוני.
 
-1. **מומלץ:** אחסון אובייקטים חיצוני (S3-compatible / Cloudflare R2 / Backblaze B2) — לא מומש כאן, דורש הרשאות/credentials חדשים שלא הוגדרו.
-2. **פתרון alpha זמני:** שדרוג Render לתוכנית עם persistent disk. `render.yaml` כבר כולל בלוק `disk` מוכן (mountPath `/var/data`, `GENERATED_MEDIA_PATH=/var/data/generated`) — הוא **לא פעיל** בפועל בתוכנית free tier; יש צורך בשדרוג תוכנית ב-Render ולוודא שהקובץ שרד אחרי deploy/restart לפני שסומכים עליו בפרודקשן.
+`app/services/object_storage.py` מממש קליינט S3-compatible (חתימת AWS SigV4 ידנית מעל httpx, בלי תלות ב-boto3) שתומך ב-Cloudflare R2, AWS S3 ו-Backblaze B2 — כולם חושפים את אותו פרוטוקול. שתי נקודות הכתיבה היחידות של מדיה שנוצרת (`app/services/media_upload.py` — העלאת תמונה, ו-`app/services/video_persistence.py` — הורדת/שמירת וידאו מהספק) בודקות תחילה אם האחסון החיצוני מוגדר:
 
-עד שהוחלט/בוצע אחת מהאופציות, אין להסתמך על שרידות תמונות/וידאו שהועלו בין deploys.
+* **מוגדר** (כל 5 משתני `OBJECT_STORAGE_*` למטה) — הקובץ נכתב ישירות לבאקט ומוחזר URL ציבורי קבוע, ששורד deploy/restart.
+* **לא מוגדר** — נופל אוטומטית לאחסון המקומי הקיים (fallback מלא, ללא שינוי התנהגות), עם אזהרה ברורה בלוג בכל כתיבה שהמדיה לא persistent במצב הזה.
+
+ראו `.env.example` לרשימת המשתנים (`OBJECT_STORAGE_ENDPOINT`, `OBJECT_STORAGE_BUCKET`, `OBJECT_STORAGE_ACCESS_KEY`, `OBJECT_STORAGE_SECRET_KEY`, `OBJECT_STORAGE_REGION`, `OBJECT_STORAGE_PUBLIC_URL_BASE`) ואת ההסבר לכל אחד. אף אחד מהם לא נשמר במאגר הנתונים — קונפיגורציית סביבה בלבד.
+
+חלופה זמינה גם: שדרוג Render לתוכנית עם persistent disk (`render.yaml` כבר כולל בלוק `disk` מוכן, מכבה כברירת מחדל בתוכנית free) — אך אחסון אובייקטים חיצוני הוא הפתרון המומלץ, גם בתוכנית בתשלום, כי הוא לא תלוי בדיסק יחיד של אינסטנס אחד.

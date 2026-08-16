@@ -1,18 +1,28 @@
-"""Image upload validation and safe on-disk persistence for shot media.
+"""Image upload validation and persistence for shot media.
 
 Never trusts the client-supplied filename as a filesystem path component —
 only the content-sniffed MIME type (cross-checked by actually decoding the
 image with Pillow) determines the stored extension. The stored filename is
 always a fresh UUID, so nothing derived from user input ever reaches the
-filesystem path.
+filesystem path (or object storage key).
+
+Storage backend: app.services.object_storage when configured (survives a
+deploy/restart), local disk under GENERATED_MEDIA_PATH otherwise — see that
+module's docstring for the required environment variables. The local-disk
+path is unconditionally kept as a fallback so the app keeps working
+out of the box in development and on any host with a persistent disk.
 """
 
 import io
+import logging
 import uuid
 
 from PIL import Image, UnidentifiedImageError
 
 from app.core.config import settings
+from app.services import object_storage
+
+logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # 15 MB — generous for a single shot reference image
 
@@ -64,12 +74,22 @@ def validate_and_store_upload(shot_id: int, content_type: str, content: bytes) -
         raise MediaUploadError(MediaUploadError.UNDECODABLE_IMAGE)
 
     filename = f"{uuid.uuid4().hex}.{extension}"
-    directory = settings.generated_media_path / "uploads" / f"shot-{int(shot_id)}"
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / filename).write_bytes(content)
+    relative_key = f"uploads/shot-{int(shot_id)}/{filename}"
+
+    if object_storage.is_configured():
+        url = object_storage.upload(content, relative_key, normalized_type)
+    else:
+        logger.warning(
+            "object_storage is not configured — storing upload on local disk, "
+            "which will NOT survive a deploy/restart without a persistent disk."
+        )
+        directory = settings.generated_media_path / "uploads" / f"shot-{int(shot_id)}"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / filename).write_bytes(content)
+        url = f"/generated/{relative_key}"
 
     return {
-        "url": f"/generated/uploads/shot-{int(shot_id)}/{filename}",
+        "url": url,
         "size_bytes": len(content),
         "content_type": normalized_type,
     }

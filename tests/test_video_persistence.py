@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 
 from app.core.config import settings
+from app.services import object_storage
 from app.services.video_persistence import (
     MAX_VIDEO_BYTES,
     VideoPersistenceError,
@@ -209,6 +210,79 @@ class VideoPersistenceTests(unittest.TestCase):
             result = persist_remote_video(provider_url, shot_id=1)
         self.assertNotIn("fal.media", result["url"])
         self.assertNotIn("secret-signed-token", result["url"])
+
+
+class VideoPersistenceObjectStorageWiringTests(unittest.TestCase):
+    """When object storage is configured, a persisted video must go there
+    instead of local disk, and never leave a local copy behind."""
+
+    _OBJECT_STORAGE_CONFIG = {
+        "object_storage_endpoint": "https://abc123.r2.cloudflarestorage.com",
+        "object_storage_bucket": "film-os-media",
+        "object_storage_access_key": "test-access-key",
+        "object_storage_secret_key": "test-secret-key",
+        "object_storage_region": "auto",
+        "object_storage_public_url_base": "https://media.example.com",
+    }
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.original_media_path = settings.generated_media_path
+        settings.generated_media_path = Path(self.tempdir.name)
+        self._originals = {
+            name: getattr(settings, name) for name in self._OBJECT_STORAGE_CONFIG
+        }
+        for name, value in self._OBJECT_STORAGE_CONFIG.items():
+            setattr(settings, name, value)
+
+    def tearDown(self):
+        settings.generated_media_path = self.original_media_path
+        self.tempdir.cleanup()
+        for name, value in self._originals.items():
+            setattr(settings, name, value)
+
+    def _patch_client(self, transport):
+        return unittest.mock.patch(
+            "app.services.video_persistence.httpx.Client",
+            lambda **kwargs: _REAL_HTTPX_CLIENT(transport=transport, **kwargs),
+        )
+
+    def test_persisted_video_goes_to_object_storage_and_leaves_no_local_copy(self):
+        transport = _mock_transport([
+            (200, {"content-type": "video/mp4"}, _FAKE_MP4_BYTES),
+        ])
+        with self._patch_client(transport), unittest.mock.patch(
+            "app.services.video_persistence.object_storage.upload",
+            return_value="https://media.example.com/videos/shot-5/fake.mp4",
+        ) as mock_upload:
+            result = persist_remote_video("https://fal.media/files/abc/video.mp4", shot_id=5)
+
+        mock_upload.assert_called_once()
+        called_key = mock_upload.call_args.args[1]
+        self.assertTrue(called_key.startswith("videos/shot-5/"))
+        self.assertEqual(result["url"], "https://media.example.com/videos/shot-5/fake.mp4")
+        # No local file left behind — including no leftover temp file.
+        self.assertEqual(list(settings.generated_media_path.rglob("*.mp4")), [])
+        self.assertEqual(
+            [p for p in settings.generated_media_path.rglob("*") if p.name.startswith(".download-")],
+            [],
+        )
+
+    def test_object_storage_upload_failure_is_retryable_and_leaves_no_local_copy(self):
+        transport = _mock_transport([
+            (200, {"content-type": "video/mp4"}, _FAKE_MP4_BYTES),
+        ])
+        with self._patch_client(transport), unittest.mock.patch(
+            "app.services.video_persistence.object_storage.upload",
+            side_effect=object_storage.ObjectStorageError(object_storage.ObjectStorageError.UPLOAD_FAILED),
+        ):
+            with self.assertRaises(VideoPersistenceError) as ctx:
+                persist_remote_video("https://fal.media/files/abc/video.mp4", shot_id=5)
+
+        self.assertEqual(ctx.exception.reason, VideoPersistenceError.OBJECT_STORAGE_UPLOAD_FAILED)
+        self.assertTrue(ctx.exception.retryable)
+        leftover_files = [p for p in settings.generated_media_path.rglob("*") if p.is_file()]
+        self.assertEqual(leftover_files, [])
 
 
 if __name__ == "__main__":
