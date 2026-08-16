@@ -8,12 +8,18 @@ media_upload.py) and outbound image fetches (app/services/public_media_url.py):
 the source URL is HTTPS-only and rejected if it resolves to a private/
 loopback/link-local/reserved host (each redirect hop is re-validated, not
 just the original URL); the download is size-bounded and streamed to a temp
-file; the temp file is atomically renamed into place only after a complete,
-successful download that actually looks like an MP4 — a failed or partial
-download never leaves a file behind and never gets treated as success.
+file; the temp file is only treated as a real, complete download after it
+actually looks like an MP4.
+
+Storage backend: the validated download is always first staged to a local
+temp file (bounding memory regardless of backend). From there it either goes
+to app.services.object_storage when configured — survives a deploy/restart —
+or is atomically renamed into place under GENERATED_MEDIA_PATH otherwise. A
+failed or partial download never leaves a file behind on either backend.
 """
 
 import ipaddress
+import logging
 import os
 import tempfile
 import uuid
@@ -23,6 +29,9 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from app.core.config import settings
+from app.services import object_storage
+
+logger = logging.getLogger(__name__)
 
 MAX_VIDEO_BYTES = 200 * 1024 * 1024  # 200 MB — generous for a 4-15s 720p clip
 _DOWNLOAD_TIMEOUT_SECONDS = 60.0
@@ -55,6 +64,7 @@ class VideoPersistenceError(RuntimeError):
     TOO_LARGE = "too_large"
     TOO_MANY_REDIRECTS = "too_many_redirects"
     WRITE_FAILED = "write_failed"
+    OBJECT_STORAGE_UPLOAD_FAILED = "object_storage_upload_failed"
 
     def __init__(self, reason: str):
         self.reason = reason
@@ -87,12 +97,12 @@ def _looks_like_mp4(head: bytes) -> bool:
 
 
 def _stream_to_disk(response: httpx.Response, shot_id: int, content_type: str, max_bytes: int) -> dict:
-    directory = settings.generated_media_path / "videos" / f"shot-{int(shot_id)}"
-    directory.mkdir(parents=True, exist_ok=True)
+    staging_dir = settings.generated_media_path / "videos" / f"shot-{int(shot_id)}"
+    staging_dir.mkdir(parents=True, exist_ok=True)
     filename = f"{uuid.uuid4().hex}.mp4"
-    destination = directory / filename
+    relative_key = f"videos/shot-{int(shot_id)}/{filename}"
 
-    fd, tmp_path_str = tempfile.mkstemp(dir=str(directory), prefix=".download-", suffix=".tmp")
+    fd, tmp_path_str = tempfile.mkstemp(dir=str(staging_dir), prefix=".download-", suffix=".tmp")
     tmp_path = Path(tmp_path_str)
     written = 0
     first_chunk = b""
@@ -116,14 +126,29 @@ def _stream_to_disk(response: httpx.Response, shot_id: int, content_type: str, m
         tmp_path.unlink(missing_ok=True)
         raise VideoPersistenceError(VideoPersistenceError.NOT_A_VALID_VIDEO)
 
-    try:
-        tmp_path.rename(destination)
-    except OSError:
-        tmp_path.unlink(missing_ok=True)
-        raise VideoPersistenceError(VideoPersistenceError.WRITE_FAILED)
+    if object_storage.is_configured():
+        try:
+            data = tmp_path.read_bytes()
+            url = object_storage.upload(data, relative_key, content_type)
+        except (OSError, object_storage.ObjectStorageError):
+            raise VideoPersistenceError(VideoPersistenceError.OBJECT_STORAGE_UPLOAD_FAILED)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+    else:
+        logger.warning(
+            "object_storage is not configured — storing video on local disk, "
+            "which will NOT survive a deploy/restart without a persistent disk."
+        )
+        destination = staging_dir / filename
+        try:
+            tmp_path.rename(destination)
+        except OSError:
+            tmp_path.unlink(missing_ok=True)
+            raise VideoPersistenceError(VideoPersistenceError.WRITE_FAILED)
+        url = f"/generated/{relative_key}"
 
     return {
-        "url": f"/generated/videos/shot-{int(shot_id)}/{filename}",
+        "url": url,
         "size_bytes": written,
         "content_type": content_type,
     }

@@ -35,6 +35,16 @@ class Settings:
     magnific_image_model = os.getenv("MAGNIFIC_IMAGE_MODEL", "nano-banana-pro")
     magnific_resolution = os.getenv("MAGNIFIC_RESOLUTION", "2K")
     generated_media_path = Path(os.getenv("GENERATED_MEDIA_PATH", BASE_DIR / "generated"))
+    # S3-compatible object storage (Cloudflare R2 / AWS S3 / Backblaze B2) for
+    # generated media — see app/services/object_storage.py. Optional: when
+    # unset, media falls back to local disk under generated_media_path, which
+    # does not survive a deploy/restart on a platform without a persistent disk.
+    object_storage_endpoint = os.getenv("OBJECT_STORAGE_ENDPOINT", "").strip()
+    object_storage_bucket = os.getenv("OBJECT_STORAGE_BUCKET", "").strip()
+    object_storage_access_key = os.getenv("OBJECT_STORAGE_ACCESS_KEY", "").strip()
+    object_storage_secret_key = os.getenv("OBJECT_STORAGE_SECRET_KEY", "").strip()
+    object_storage_region = os.getenv("OBJECT_STORAGE_REGION", "auto").strip()
+    object_storage_public_url_base = os.getenv("OBJECT_STORAGE_PUBLIC_URL_BASE", "").strip()
     port = int(os.getenv("PORT", "8000"))
     # Seedance via fal.ai (primary video provider for Gate 2)
     fal_api_key = os.getenv("FAL_API_KEY", "").strip()
