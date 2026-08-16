@@ -26,6 +26,10 @@ POLL_INTERVAL_SECONDS = float(os.getenv("MEDIA_WORKER_POLL_INTERVAL", "3"))
 TASK_TIMEOUT_SECONDS = float(os.getenv("MEDIA_WORKER_TASK_TIMEOUT", "600"))
 KLING_POLL_INTERVAL = float(os.getenv("KLING_WORKER_POLL_INTERVAL", "15"))
 SEEDANCE_POLL_INTERVAL = float(os.getenv("SEEDANCE_WORKER_POLL_INTERVAL", "8"))
+# Local generation has no per-request billing/rate-limit concern the way an
+# external API does, so this defaults much shorter than the external
+# providers' cadences above — faster feedback on a draft is the whole point.
+COMFYUI_POLL_INTERVAL = float(os.getenv("COMFYUI_WORKER_POLL_INTERVAL", "2"))
 IDLE_SLEEP_SECONDS = float(os.getenv("MEDIA_WORKER_IDLE_SLEEP", "2"))
 
 # Providers whose submit()/check_task() pair is safe to resume: the task id
@@ -36,6 +40,7 @@ IDLE_SLEEP_SECONDS = float(os.getenv("MEDIA_WORKER_IDLE_SLEEP", "2"))
 _RESUMABLE_PROVIDER_POLL_INTERVALS = {
     "kling": KLING_POLL_INTERVAL,
     "seedance": SEEDANCE_POLL_INTERVAL,
+    "local_comfyui": COMFYUI_POLL_INTERVAL,
 }
 
 
@@ -43,23 +48,31 @@ def _worker_id() -> str:
     return os.getenv("MEDIA_WORKER_ID") or f"{socket.gethostname()}-{os.getpid()}"
 
 
-def _wait_for_magnific(
-    task_id: str,
+def _wait_for_image_task(
+    fetch_task: Callable[[], dict],
     *,
+    provider_label: str,
     timeout_seconds: float = TASK_TIMEOUT_SECONDS,
     poll_interval: float = POLL_INTERVAL_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict:
+    """Poll an image task to completion. Works for any submit()/poll() image
+    provider using the same status vocabulary Magnific does ("IN_PROGRESS"/
+    "COMPLETED"/"FAILED"/"CANCELLED"/"ERROR") — both Magnific (external,
+    default) and LocalComfyUIImageProvider (local, draft_mode) use it
+    unchanged; only ``fetch_task`` (a zero-arg closure over whichever
+    provider/task_id is active) differs per caller.
+    """
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        task = get_magnific_image(task_id)
+        task = fetch_task()
         status = task.get("status", "UNKNOWN")
         if status == "COMPLETED":
             return task
         if status in {"FAILED", "CANCELLED", "ERROR"}:
-            raise RuntimeError(f"Magnific task ended with status {status}.")
+            raise RuntimeError(f"{provider_label} task ended with status {status}.")
         sleep(poll_interval)
-    raise TimeoutError("Magnific task polling timed out.")
+    raise TimeoutError(f"{provider_label} task polling timed out.")
 
 
 class ProviderTaskFailed(RuntimeError):
@@ -263,22 +276,48 @@ def _process_image_job(job: dict) -> dict:
         raise ValueError("השוט של משימת המדיה לא נמצא.")
 
     payload = job.get("payload") or {}
-    submitted = submit_magnific_image(
-        shot,
-        instructions=str(payload.get("instructions", "")),
-        aspect_ratio=str(payload.get("aspect_ratio", "16:9")),
-    )
-    task_id = submitted["task_id"]
-    task = _wait_for_magnific(task_id)
+    draft_mode = bool(payload.get("draft_mode"))
+
+    if draft_mode:
+        from app.services.providers import comfyui_client
+        from app.services.providers.local_comfyui_image_provider import LocalComfyUIImageProvider
+
+        if not comfyui_client.is_configured():
+            raise GenerationNotConfigured(
+                "COMFYUI_ENDPOINT is not configured — draft mode requires a local "
+                "ComfyUI instance. See SETUP_NOTES.md for how to install and run one."
+            )
+        image_provider = LocalComfyUIImageProvider()
+        submitted = image_provider.submit(
+            shot,
+            instructions=str(payload.get("instructions", "")),
+            model=str(payload.get("local_model") or "sdxl"),
+        )
+        task_id = submitted["task_id"]
+        task = _wait_for_image_task(
+            lambda: image_provider.check_task(task_id, shot_id=job["shot_id"]),
+            provider_label="local_comfyui_image",
+        )
+        skip_validation = True  # already validated as a real image on write, see validate_and_store_upload
+    else:
+        submitted = submit_magnific_image(
+            shot,
+            instructions=str(payload.get("instructions", "")),
+            aspect_ratio=str(payload.get("aspect_ratio", "16:9")),
+        )
+        task_id = submitted["task_id"]
+        task = _wait_for_image_task(lambda: get_magnific_image(task_id), provider_label="Magnific")
+        skip_validation = False
 
     if any(task.get("has_nsfw", [])):
         raise ValueError("Magnific חסם את התוצאה בבדיקת התוכן.")
     generated = task.get("generated") or []
     if not generated:
-        raise RuntimeError("Magnific completed without an image result.")
+        raise RuntimeError(f"{submitted.get('provider', 'Provider')} completed without an image result.")
 
     image_url = generated[0]
-    validate_generated_image(image_url)
+    if not skip_validation:
+        validate_generated_image(image_url)
     media = shots.create_media_result(job["shot_id"], {
         "media_type": "image",
         "url": image_url,
@@ -359,9 +398,10 @@ def _process_video_job(job: dict) -> dict:
         audio_mode=str(payload.get("audio_mode") or "none"),
         aspect_ratio=str(payload.get("aspect_ratio") or "16:9"),
         model_profile=selection.profile,
+        local_model=str(payload.get("local_model") or "wan"),
     )
 
-    provider = get_video_provider()
+    provider = get_video_provider(draft_mode=bool(payload.get("draft_mode")))
 
     if hasattr(provider, "submit") and hasattr(provider, "check_task"):
         # Any provider implementing the non-blocking submit()/check_task()
@@ -376,7 +416,11 @@ def _process_video_job(job: dict) -> dict:
         # so a persistence failure here is retryable purely as a re-download,
         # never as a reason to resubmit to the provider (see
         # _submit_or_resume_task: provider_task_id is already persisted).
-        persisted = persist_remote_video(provider_video_url, job["shot_id"])
+        persisted = persist_remote_video(
+            provider_video_url,
+            job["shot_id"],
+            allow_private_host=bool(getattr(provider, "trusted_local", False)),
+        )
         result = VideoGenerationResult(
             url=persisted["url"],
             provider=getattr(provider, "name", ""),

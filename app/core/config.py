@@ -45,6 +45,14 @@ class Settings:
     object_storage_secret_key = os.getenv("OBJECT_STORAGE_SECRET_KEY", "").strip()
     object_storage_region = os.getenv("OBJECT_STORAGE_REGION", "auto").strip()
     object_storage_public_url_base = os.getenv("OBJECT_STORAGE_PUBLIC_URL_BASE", "").strip()
+    # Local ComfyUI (draft-quality video/image generation on local hardware —
+    # see app/services/providers/). Optional: unset means the local provider
+    # is never selected, regardless of a shot's draft_mode request.
+    comfyui_endpoint = os.getenv("COMFYUI_ENDPOINT", "").strip().rstrip("/")
+    comfyui_workflow_ltx_path = os.getenv("COMFYUI_WORKFLOW_LTX_PATH", "").strip()
+    comfyui_workflow_wan_path = os.getenv("COMFYUI_WORKFLOW_WAN_PATH", "").strip()
+    comfyui_workflow_sdxl_path = os.getenv("COMFYUI_WORKFLOW_SDXL_PATH", "").strip()
+    comfyui_workflow_flux_path = os.getenv("COMFYUI_WORKFLOW_FLUX_PATH", "").strip()
     port = int(os.getenv("PORT", "8000"))
     # Seedance via fal.ai (primary video provider for Gate 2)
     fal_api_key = os.getenv("FAL_API_KEY", "").strip()

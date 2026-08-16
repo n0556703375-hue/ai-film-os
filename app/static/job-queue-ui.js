@@ -5,7 +5,30 @@ window.generateWithOpenAI = async function generateWithQueuedMedia(shotId, media
   if (mediaType !== "image") {
     return directGenerateWithOpenAI(shotId, mediaType);
   }
-  if (!confirm("ליצור תמונה חדשה? הפעולה משתמשת בקרדיט API ותתבצע בתור הרקע.")) return;
+  showImageGenerationForm(shotId);
+};
+
+function showImageGenerationForm(shotId) {
+  show(`<h2>הגדרות יצירת תמונה</h2>
+    <p class="meta">הפעולה תתבצע בתור הרקע ותמשיך גם אם החלון ייסגר.</p>
+    <label class="asset-check">
+      <input type="checkbox" id="imageDraftMode">
+      <span>מצב טיוטה מקומי (ComfyUI) — במקום Magnific, ללא עלות/קרדיט API</span>
+    </label>
+    <div id="imageDraftModelRow" style="display:none">
+      <label>מודל מקומי</label>
+      <select id="imageDraftModel"><option value="sdxl">SDXL</option><option value="flux">Flux.1</option></select>
+    </div>
+    <button onclick="queueImageGeneration(${shotId})">הוספה לתור התמונה</button>
+    <button class="secondary" onclick="openShot(${shotId})">ביטול</button>`);
+  $("imageDraftMode").onchange = (event) => {
+    $("imageDraftModelRow").style.display = event.target.checked ? "" : "none";
+  };
+}
+
+async function queueImageGeneration(shotId) {
+  const draftMode = $("imageDraftMode").checked;
+  if (!draftMode && !confirm("ליצור תמונה חדשה? הפעולה משתמשת בקרדיט API ותתבצע בתור הרקע.")) return;
 
   show("<h2>הוספת יצירת תמונה לתור</h2><p>הבקשה נשמרת ותמשיך גם אם החלון ייסגר.</p>");
   try {
@@ -16,13 +39,15 @@ window.generateWithOpenAI = async function generateWithQueuedMedia(shotId, media
         instructions: "",
         size: "1536x1024",
         quality: "medium",
+        draft_mode: draftMode,
+        local_model: draftMode ? $("imageDraftModel").value : "sdxl",
       }),
     });
     await waitForMediaJob(shotId, data.job.id, "תמונה");
   } catch (error) {
     showError(error);
   }
-};
+}
 
 window.openShot = async function openShotWithVideoControls(shotId) {
   await baseOpenShot(shotId);
@@ -44,6 +69,17 @@ window.openShot = async function openShotWithVideoControls(shotId) {
 function showVideoGenerationForm(shotId) {
   show(`<h2>הגדרות יצירת וידאו</h2>
     <p class="meta">נדרשת תמונת שוט מאושרת. שליחת המשימה עשויה להשתמש בקרדיט API לאחר חיבור ספק.</p>
+    <label class="asset-check">
+      <input type="checkbox" id="videoDraftMode">
+      <span>מצב טיוטה מקומי (ComfyUI) — במקום Kling/Seedance, ללא עלות/קרדיט API</span>
+    </label>
+    <div id="videoDraftModelRow" style="display:none">
+      <label>מודל מקומי</label>
+      <select id="videoDraftModel">
+        <option value="wan">Wan 2.2 (ללא אודיו)</option>
+        <option value="ltx">LTX-2.3 (כולל אודיו מסונכרן)</option>
+      </select>
+    </div>
     <div class="form-grid">
       <div><label>משך בשניות</label><input id="videoDuration" type="number" min="1" max="30" step="0.5" value="5"></div>
       <div><label>יחס תמונה</label><select id="videoAspect"><option>16:9</option><option>9:16</option><option>1:1</option></select></div>
@@ -54,10 +90,14 @@ function showVideoGenerationForm(shotId) {
     </div>
     <button onclick="queueVideoGeneration(${shotId})">הוספה לתור הווידאו</button>
     <button class="secondary" onclick="openShot(${shotId})">ביטול</button>`);
+  $("videoDraftMode").onchange = (event) => {
+    $("videoDraftModelRow").style.display = event.target.checked ? "" : "none";
+  };
 }
 
 async function queueVideoGeneration(shotId) {
-  if (!confirm("להוסיף יצירת וידאו לתור? לאחר חיבור ספק הפעולה עשויה להשתמש בקרדיט API.")) return;
+  const draftMode = $("videoDraftMode").checked;
+  if (!draftMode && !confirm("להוסיף יצירת וידאו לתור? לאחר חיבור ספק הפעולה עשויה להשתמש בקרדיט API.")) return;
   try {
     const data = await api(`/api/video-generation/shots/${shotId}/queue`, {
       method: "POST",
@@ -68,6 +108,8 @@ async function queueVideoGeneration(shotId) {
         aspect_ratio: $("videoAspect").value,
         model_hint: $("videoModel").value,
         instructions: $("videoInstructions").value,
+        draft_mode: draftMode,
+        local_model: draftMode ? $("videoDraftModel").value : "wan",
       }),
     });
     show("<h2>משימת הווידאו נוספה לתור</h2><p>המשימה נשמרה ותמשיך ברקע.</p>");

@@ -118,7 +118,7 @@ class SeedanceWorkerResumabilityTests(unittest.TestCase):
         self.persisted_url = f"/generated/videos/shot-{self.shot['id']}/mocked-uuid.mp4"
         self.persist_calls = []
 
-        def _fake_persist(provider_video_url, shot_id):
+        def _fake_persist(provider_video_url, shot_id, **kwargs):
             self.persist_calls.append((provider_video_url, shot_id))
             return {"url": self.persisted_url, "size_bytes": 1024, "content_type": "video/mp4"}
 
@@ -139,7 +139,7 @@ class SeedanceWorkerResumabilityTests(unittest.TestCase):
         return job
 
     def _use_provider(self, fake):
-        worker.get_video_provider = lambda: fake
+        worker.get_video_provider = lambda **kwargs: fake
 
     def test_submit_or_resume_submits_once_then_resumes(self):
         fake = _FakeSeedance([])

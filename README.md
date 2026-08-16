@@ -98,3 +98,17 @@ Kling מאמת עם זוג AccessKey/SecretKey שחותם JWT קצר־מועד (
 ראו `.env.example` לרשימת המשתנים (`OBJECT_STORAGE_ENDPOINT`, `OBJECT_STORAGE_BUCKET`, `OBJECT_STORAGE_ACCESS_KEY`, `OBJECT_STORAGE_SECRET_KEY`, `OBJECT_STORAGE_REGION`, `OBJECT_STORAGE_PUBLIC_URL_BASE`) ואת ההסבר לכל אחד. אף אחד מהם לא נשמר במאגר הנתונים — קונפיגורציית סביבה בלבד.
 
 חלופה זמינה גם: שדרוג Render לתוכנית עם persistent disk (`render.yaml` כבר כולל בלוק `disk` מוכן, מכבה כברירת מחדל בתוכנית free) — אך אחסון אובייקטים חיצוני הוא הפתרון המומלץ, גם בתוכנית בתשלום, כי הוא לא תלוי בדיסק יחיד של אינסטנס אחד.
+
+## ספק "מצב טיוטה" מקומי (ComfyUI) — וידאו + תמונה, ללא עלות
+
+בנוסף לספקי הווידאו החיצוניים (Kling/Seedance) ולספק התמונה החיצוני (Magnific/Nano Banana Pro) קיים כעת **ספק שלישי, מקומי וחינמי**, לאיטרציה מהירה על שוט לפני שליחתו לספק החיצוני היקר. זו תוספת בלבד — הספקים החיצוניים לא נגעו בהם, וברירת המחדל של "מצב טיוטה" היא **כבויה**, כך שהתנהגות קיימת לא משתנה עד שמישהו מסמן את התיבה במפורש.
+
+**איך זה עובד:** [ComfyUI](https://github.com/comfyanonymous/ComfyUI) רץ כשירות נפרד על מחשב מקומי (לא ב-Render, לא בענן) עם GPU — למשל תחנת עבודה עם RTX 5070 12GB. `COMFYUI_ENDPOINT` (למשל `http://localhost:8188`) מצביע לשם. כשמישהו מסמן "מצב טיוטה מקומי" במסך יצירת שוט (וידאו או תמונה), הבקשה מנותבת ל-ComfyUI במקום לספק החיצוני:
+
+* **וידאו**: `app/services/providers/local_comfyui_provider.py` — תומך ב-**LTX-2.3** (כולל אודיו מסונכרן) ו-**Wan 2.2** (ללא אודיו). מממש בדיוק את אותו ממשק `submit()`/`check_task()` הקיים כבר עבור Kling/Seedance (`app/services/video_provider.py`), ואת אותה לולאת polling ב-`app/worker.py` — לא נוסף מנגנון חדש.
+* **תמונה**: `app/services/providers/local_comfyui_image_provider.py` — תומך ב-**SDXL** ו-**Flux.1** (מכומת ל-Q4 כדי להיכנס ל-12GB VRAM). מממש את אותו pattern submit/poll שכבר קיים ב-`app/worker.py` עבור Magnific.
+* שני הספקים חולקים לקוח HTTP משותף (`app/services/providers/comfyui_client.py`) שלא יוצא לאינטרנט הציבורי כלל — כל בקשה הולכת ל-`COMFYUI_ENDPOINT` בלבד.
+
+**דרישה מקדימה — התקנה מקומית של ComfyUI:** זה **לא** מבוצע כחלק מה-repo הזה (ComfyUI עצמו לא נכנס ל-git). יש להתקין אותו בנפרד על המחשב עם ה-GPU, ולשמור שם גם את קבצי ה-workflow (JSON) שהאינטגרציה כאן טוענת דרך `COMFYUI_WORKFLOW_LTX_PATH` / `COMFYUI_WORKFLOW_WAN_PATH` / `COMFYUI_WORKFLOW_SDXL_PATH` / `COMFYUI_WORKFLOW_FLUX_PATH`. כל קובץ workflow חייב להיות "API format" export של ComfyUI, עם node-ים מסומנים בכותרת (`_meta.title`) בדיוק `AIFilmOS_Prompt` / `AIFilmOS_Image` / `AIFilmOS_Frames` / `AIFilmOS_Seed` — כך שהאינטגרציה יודעת אילו ערכים לעדכן לפני שליחה. ההסכם המלא מתועד ב-docstring של `comfyui_client.py`.
+
+ראו `.env.example` לרשימת כל משתני ה-`COMFYUI_*`. כשה-`COMFYUI_ENDPOINT` ריק, מצב הטיוטה פשוט לא זמין — ניסיון להפעיל אותו מחזיר שגיאה ברורה, לא נופל בשקט לספק החיצוני (כדי לא לגבות בטעות דרך ספק בתשלום כשהכוונה הייתה טיוטה חינמית).

@@ -21,6 +21,12 @@ class VideoQueueRequest(BaseModel):
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
     model_hint: Literal["auto", "cinematic", "fast", "high_fidelity"] = "auto"
     instructions: str = Field(default="", max_length=5000)
+    # Draft mode (default off — unchanged behavior unless explicitly opted
+    # into): routes generation to the local ComfyUI provider instead of the
+    # external one, for fast/free iteration. See app/services/video_provider.
+    # get_video_provider's draft_mode parameter and app/worker.py.
+    draft_mode: bool = False
+    local_model: Literal["ltx", "wan"] = "wan"
 
 
 class ConfirmedRetryRequest(BaseModel):
@@ -154,6 +160,8 @@ def queue_video(shot_id: int, request: VideoQueueRequest):
         "selected_model_profile": model_profile.profile,
         "model_selection_reason": model_profile.reason,
         "instructions": request.instructions,
+        "draft_mode": request.draft_mode,
+        "local_model": request.local_model,
     }
     job, created = jobs.enqueue_job(
         shot["project_id"],

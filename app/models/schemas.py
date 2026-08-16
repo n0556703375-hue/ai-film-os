@@ -176,6 +176,12 @@ class GenerationRequest(BaseModel):
     instructions: str = Field(default="", max_length=5000)
     size: Literal["1024x1024", "1536x1024", "1024x1536"] = "1536x1024"
     quality: Literal["low", "medium", "high"] = "medium"
+    # Draft mode (default off): only honored by the async /queue endpoint
+    # (app/api/generation.py::queue_for_shot), which is what app/worker.py
+    # processes — routes to the local ComfyUI provider instead of Magnific.
+    # See app/services/providers/local_comfyui_image_provider.py.
+    draft_mode: bool = False
+    local_model: Literal["sdxl", "flux"] = "sdxl"
 
 class ShotMapRequest(BaseModel):
     shot_count: int = Field(default=6, ge=1, le=60)

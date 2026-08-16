@@ -9,6 +9,8 @@ from app.repositories import jobs, projects, scenes, shots
 from app.services.video_provider import VideoGenerationResult
 from app.worker import process_one_job
 
+import app.worker as worker
+
 
 class MediaWorkerTests(unittest.TestCase):
     def setUp(self):
@@ -16,6 +18,8 @@ class MediaWorkerTests(unittest.TestCase):
         self.original_db = settings.database_path
         settings.database_path = Path(self.tempdir.name) / "test.db"
         init_db()
+        self._real_sleep = worker.time.sleep
+        worker.time.sleep = lambda *_a, **_k: None
         project = projects.create_project({
             "name": "Worker Test",
             "description": "",
@@ -47,11 +51,12 @@ class MediaWorkerTests(unittest.TestCase):
         self.project_id = project["id"]
 
     def tearDown(self):
+        worker.time.sleep = self._real_sleep
         settings.database_path = self.original_db
         self.tempdir.cleanup()
 
     @patch("app.worker.validate_generated_image")
-    @patch("app.worker._wait_for_magnific")
+    @patch("app.worker._wait_for_image_task")
     @patch("app.worker.submit_magnific_image")
     def test_image_job_creates_media_and_completes(self, submit, wait, validate):
         submit.return_value = {
@@ -150,6 +155,79 @@ class MediaWorkerTests(unittest.TestCase):
 
     def test_empty_queue_returns_none(self):
         self.assertIsNone(process_one_job("test-worker"))
+
+    @patch("app.services.providers.local_comfyui_image_provider.LocalComfyUIImageProvider")
+    @patch("app.services.providers.comfyui_client.is_configured", return_value=True)
+    def test_draft_mode_image_job_uses_local_comfyui_provider(self, _is_configured, provider_cls):
+        provider = Mock()
+        provider.submit.return_value = {
+            "task_id": "local-img-1", "status": "IN_PROGRESS",
+            "provider": "local_comfyui_image", "model": "sdxl-1.0",
+        }
+        provider.check_task.return_value = {
+            "task_id": "local-img-1", "status": "COMPLETED",
+            "generated": ["/generated/uploads/shot-1/local.png"], "has_nsfw": [False],
+        }
+        provider_cls.return_value = provider
+
+        jobs.enqueue_job(
+            self.project_id, self.shot["id"], "image",
+            {"draft_mode": True, "local_model": "sdxl"}, "worker-draft-image-1",
+        )
+
+        completed = process_one_job("test-worker")
+
+        self.assertEqual(completed["status"], "completed")
+        media = shots.list_media_results(self.shot["id"])
+        self.assertEqual(media[0]["url"], "/generated/uploads/shot-1/local.png")
+        provider.submit.assert_called_once()
+        self.assertEqual(provider.submit.call_args.kwargs["model"], "sdxl")
+
+    @patch("app.services.providers.comfyui_client.is_configured", return_value=False)
+    def test_draft_mode_image_job_without_comfyui_configured_fails_non_retryable(self, _is_configured):
+        jobs.enqueue_job(
+            self.project_id, self.shot["id"], "image",
+            {"draft_mode": True}, "worker-draft-image-unconfigured",
+        )
+
+        failed = process_one_job("test-worker")
+
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["attempts"], 1)
+        self.assertIn("COMFYUI_ENDPOINT", failed["last_error"])
+
+    @patch("app.worker.persist_remote_video")
+    @patch("app.worker.get_video_provider")
+    def test_draft_mode_video_job_allows_private_host_persistence(self, get_provider, persist):
+        shots.create_media_result(self.shot["id"], {
+            "media_type": "image",
+            "url": "https://example.com/approved.jpg",
+            "provider": "Magnific",
+            "model": "Nano Banana Pro",
+            "status": "מאושר",
+        })
+        provider = Mock(spec=["submit", "check_task", "model_for", "cost_for", "name", "trusted_local"])
+        provider.name = "local_comfyui"
+        provider.trusted_local = True
+        provider.submit.return_value = "local-video-task-1"
+        provider.check_task.return_value = {"status": "succeed", "url": "http://localhost:8188/view?filename=out.mp4"}
+        provider.model_for.return_value = "wan-2.2-14b"
+        provider.cost_for.return_value = 0.0
+        get_provider.return_value = provider
+        persist.return_value = {"url": "/generated/videos/shot-1/local.mp4", "size_bytes": 10, "content_type": "video/mp4"}
+
+        jobs.enqueue_job(
+            self.project_id, self.shot["id"], "video",
+            {"draft_mode": True, "local_model": "wan"}, "worker-draft-video-1",
+        )
+
+        completed = process_one_job("test-worker")
+
+        self.assertEqual(completed["status"], "completed")
+        get_provider.assert_called_once_with(draft_mode=True)
+        persist.assert_called_once_with(
+            "http://localhost:8188/view?filename=out.mp4", self.shot["id"], allow_private_host=True,
+        )
 
 
 if __name__ == "__main__":
