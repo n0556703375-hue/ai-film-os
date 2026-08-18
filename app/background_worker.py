@@ -10,6 +10,8 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
+from app.core.config import settings
+from app.services.identity_worker_runner import process_next_identity_assessment
 from app.worker import process_one_job, _worker_id
 
 logger = logging.getLogger(__name__)
@@ -20,6 +22,34 @@ _last_job_shot_id: Optional[int] = None
 _jobs_processed_count: int = 0
 _thread_lock = threading.Lock()
 _stop_event = threading.Event()
+
+
+def _process_next_identity_assessment_safely(worker_id: str) -> bool:
+    """Best-effort: process one pending identity-drift assessment (image or
+    video), if any and if OpenAI is configured. Never raises — a vision
+    provider hiccup must not take down the media generation queue this
+    shares a thread with. Returns True if an assessment was processed.
+
+    Skipped entirely when OPENAI_API_KEY is unset, rather than attempting
+    it and recording a terminal "error" verdict on every pending item —
+    that would burn through the queue instead of just leaving it pending
+    until a key is eventually configured (see app/services/
+    identity_worker_runner.py, which is what actually claims/evaluates).
+    """
+    if not settings.openai_api_key:
+        return False
+    try:
+        result = process_next_identity_assessment(worker_id=worker_id)
+    except Exception as exc:
+        logger.exception(f"Identity assessment worker error: {exc}")
+        return False
+    if result.get("processed"):
+        logger.info(
+            f"Identity assessment processed (shot_id={result.get('shot_id')}, "
+            f"media_id={result.get('media_id')})"
+        )
+        return True
+    return False
 
 
 def _worker_loop(stop_event: threading.Event) -> None:
@@ -46,7 +76,10 @@ def _worker_loop(stop_event: threading.Event) -> None:
                     f"shot_id={result.get('shot_id')}, "
                     f"status={result.get('status')})"
                 )
-            else:
+                continue
+
+            identity_processed = _process_next_identity_assessment_safely(worker_id)
+            if not identity_processed:
                 stop_event.wait(2)
         except Exception as exc:
             logger.exception(f"Background worker error: {exc}")

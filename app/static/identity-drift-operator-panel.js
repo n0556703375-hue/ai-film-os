@@ -32,6 +32,12 @@
     return Number.isFinite(value) ? `${Math.round(value * 100)}%` : "—";
   }
 
+  function mediaTypeLabel(mediaType) {
+    if (mediaType === "video") return "וידאו";
+    if (mediaType === "image") return "תמונה";
+    return "";
+  }
+
   function renderIdentityDriftOperatorPanel(payload) {
     const items = orderCompletedAssessments(payload && payload.items);
     if (!items.length) {
@@ -49,8 +55,10 @@
       <div class="grid">${items.map((item) => {
         const assessment = item.identity_drift || {};
         const reasons = Array.isArray(assessment.reasons) ? assessment.reasons : [];
-        return `<article class="card" data-identity-status="${escapeHtml(assessment.status)}" data-shot-id="${escapeHtml(item.shot_id)}">
+        const mediaLabel = mediaTypeLabel(item.media_type);
+        return `<article class="card" data-identity-status="${escapeHtml(assessment.status)}" data-shot-id="${escapeHtml(item.shot_id)}" data-media-type="${escapeHtml(item.media_type || "")}">
           <span class="badge">${escapeHtml(assessment.status || "unknown")}</span>
+          ${mediaLabel ? `<span class="badge">${mediaLabel}</span>` : ""}
           <div class="title">שוט ${escapeHtml(item.shot_id)}</div>
           <div class="meta">ציון: ${formatScore(assessment.score)} · ניסיון ${escapeHtml(assessment.attempt || 1)}</div>
           ${assessment.worker_id ? `<div class="meta">עובד: ${escapeHtml(assessment.worker_id)}</div>` : ""}
@@ -61,7 +69,7 @@
     </section>`;
   }
 
-  const api = { escapeHtml, formatScore, orderCompletedAssessments, renderIdentityDriftOperatorPanel };
+  const api = { escapeHtml, formatScore, mediaTypeLabel, orderCompletedAssessments, renderIdentityDriftOperatorPanel };
   if (root) root.identityDriftOperatorPanel = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

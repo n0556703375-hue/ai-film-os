@@ -86,7 +86,7 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
             )
             conn.commit()
 
-    def test_lists_only_pending_image_assessments(self):
+    def test_lists_pending_image_and_video_assessments_but_not_completed(self):
         completed = shots.create_media_result(self.shot["id"], {
             "media_type": "image",
             "url": "https://example.com/completed.jpg",
@@ -95,7 +95,7 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
                 "identity_drift": {"status": "passed", "passed": True},
             },
         })
-        shots.create_media_result(self.shot["id"], {
+        pending_video = shots.create_media_result(self.shot["id"], {
             "media_type": "video",
             "url": "https://example.com/video.mp4",
             "status": "טיוטה",
@@ -109,10 +109,13 @@ class IdentityDriftAssessmentTests(unittest.TestCase):
             limit=50,
         )
 
-        self.assertEqual(result["count"], 1)
-        self.assertEqual(result["items"][0]["media_id"], self.media["id"])
-        self.assertEqual(result["items"][0]["shot_id"], self.shot["id"])
-        self.assertNotEqual(result["items"][0]["media_id"], completed["id"])
+        media_ids = {item["media_id"] for item in result["items"]}
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(media_ids, {self.media["id"], pending_video["id"]})
+        self.assertNotIn(completed["id"], media_ids)
+        by_id = {item["media_id"]: item for item in result["items"]}
+        self.assertEqual(by_id[self.media["id"]]["media_type"], "image")
+        self.assertEqual(by_id[pending_video["id"]]["media_type"], "video")
 
     def test_pending_assessment_queue_respects_limit(self):
         second = shots.create_media_result(self.shot["id"], {

@@ -112,3 +112,14 @@ Kling מאמת עם זוג AccessKey/SecretKey שחותם JWT קצר־מועד (
 **דרישה מקדימה — התקנה מקומית של ComfyUI:** זה **לא** מבוצע כחלק מה-repo הזה (ComfyUI עצמו לא נכנס ל-git). יש להתקין אותו בנפרד על המחשב עם ה-GPU, ולשמור שם גם את קבצי ה-workflow (JSON) שהאינטגרציה כאן טוענת דרך `COMFYUI_WORKFLOW_LTX_PATH` / `COMFYUI_WORKFLOW_WAN_PATH` / `COMFYUI_WORKFLOW_SDXL_PATH` / `COMFYUI_WORKFLOW_FLUX_PATH`. כל קובץ workflow חייב להיות "API format" export של ComfyUI, עם node-ים מסומנים בכותרת (`_meta.title`) בדיוק `AIFilmOS_Prompt` / `AIFilmOS_Image` / `AIFilmOS_Frames` / `AIFilmOS_Seed` — כך שהאינטגרציה יודעת אילו ערכים לעדכן לפני שליחה. ההסכם המלא מתועד ב-docstring של `comfyui_client.py`.
 
 ראו `.env.example` לרשימת כל משתני ה-`COMFYUI_*`. כשה-`COMFYUI_ENDPOINT` ריק, מצב הטיוטה פשוט לא זמין — ניסיון להפעיל אותו מחזיר שגיאה ברורה, לא נופל בשקט לספק החיצוני (כדי לא לגבות בטעות דרך ספק בתשלום כשהכוונה הייתה טיוטה חינמית).
+
+## בדיקת AI לעקביות זהות (Identity Drift) — תמונה + וידאו, אוטומטית
+
+בדיקה אוטומטית (לא ידנית) שמשווה כל תמונה/וידאו שנוצר לשוט מול תמונת הרפרנס הנעולה (Master) של הדמויות המשויכות אליו, באמצעות OpenAI Vision (`OPENAI_VISION_MODEL`), ומחזירה ציון דמיון וזיהוי חריגות (למשל `different_person`, `age_shift`, `face_structure_changed`).
+
+**מה תוקן כאן:** המנגנון היה קיים בקוד (endpoints, worker, אחסון תוצאה) אבל לא היה מחובר לשום דבר שמריץ אותו בפועל — התור נשאר ריק לתמיד כי שום דבר לא סימן פריט חדש כ"ממתין", ושום thread לא קרא לעבד אותו. עכשיו:
+
+* **חיבור אוטומטי:** בכל פעם שנוצרת תוצאת מדיה (תמונה או וידאו) לשוט שיש לו דמות נעולה (`lock_status='locked'`), `create_media_result` מסמן אותה אוטומטית כ"ממתינה" (`app/repositories/shots.py`). ה-thread שכבר רץ ברקע לעיבוד תור המדיה (`app/background_worker.py`) מעבד גם פריטי זהות ממתינים — אין צורך בהרצה ידנית של סקריפט, כל עוד `OPENAI_API_KEY` מוגדר (אחרת הבדיקה פשוט נשארת ממתינה, לא נכשלת).
+* **מקבילה לווידאו:** `app/services/video_identity_vision.py` מחלץ פריים מייצג מהווידאו שנוצר (`app/services/video_frame_extraction.py`, דרך ffmpeg מובנה ב-`imageio[ffmpeg]`, בלי תלות במערכת) וממיר אותו ל-`data:` URI — ואז מעביר אותו לאותה בדיקה בדיוק שהתמונות כבר עוברות (`evaluate_shot_identity`), ללא לוגיקת השוואה כפולה.
+* ה-API הקיים (`GET /api/shots/identity-drift/pending`, `.../completed`, `POST .../requeue-stale` וכו') משרת כעת גם תמונה וגם וידאו יחד — כל פריט כולל `media_type` להבחנה.
+* הרצה ידנית עדיין אפשרית דרך `scripts/process_identity_assessments.py` אם רוצים לעבד באופן חד-פעמי/מתוזמן מחוץ ל-thread הרקע.

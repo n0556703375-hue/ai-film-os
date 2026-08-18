@@ -1,7 +1,10 @@
 import json
 from contextlib import closing
+from datetime import datetime, timezone
 from app.database.connection import get_connection
 from app.database.query import execute_query
+
+_IDENTITY_DRIFT_MEDIA_TYPES = {"image", "video"}
 
 
 PIPELINE_STATUS_ALIASES = {
@@ -293,6 +296,19 @@ def list_media_results(shot_id: int):
     ]
 
 
+def _shot_has_locked_character(conn, shot_id: int) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1 FROM shot_assets sa
+        JOIN assets a ON a.id = sa.asset_id
+        WHERE sa.shot_id=? AND a.asset_type='דמות' AND a.lock_status='locked'
+        LIMIT 1
+        """,
+        (shot_id,),
+    ).fetchone()
+    return bool(row)
+
+
 def create_media_result(shot_id: int, data: dict):
     with closing(get_connection()) as conn:
         shot = conn.execute("SELECT * FROM shots WHERE id=?", (shot_id,)).fetchone()
@@ -302,7 +318,22 @@ def create_media_result(shot_id: int, data: dict):
             "SELECT COALESCE(MAX(version),0)+1 AS next_version FROM media_results WHERE shot_id=? AND media_type=?",
             (shot_id, data["media_type"]),
         ).fetchone()
-        metadata = data.pop("metadata", {})
+        metadata = dict(data.pop("metadata", {}) or {})
+        # Auto-queue an identity-drift assessment (image or video) whenever
+        # the shot has a locked character master to compare against — this
+        # is what makes the AI identity check actually run without a manual
+        # trigger; see app/services/identity_worker_runner.py and
+        # app/background_worker.py, which pick "pending" items like this one
+        # up automatically. A shot with no locked character has nothing to
+        # compare against, so it's left untouched (matches
+        # evaluate_shot_identity's own no-op precondition).
+        if data["media_type"] in _IDENTITY_DRIFT_MEDIA_TYPES and "identity_drift" not in metadata:
+            if _shot_has_locked_character(conn, shot_id):
+                metadata["identity_drift"] = {
+                    "status": "pending",
+                    "queued_at": datetime.now(timezone.utc).isoformat(),
+                    "attempt": 0,
+                }
         cur = conn.execute(
             """
             INSERT INTO media_results

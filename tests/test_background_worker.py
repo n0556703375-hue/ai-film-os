@@ -112,6 +112,44 @@ class BackgroundWorkerStatusTests(unittest.TestCase):
         background_worker.stop()
         self.assertFalse(background_worker.is_alive())
 
+    def test_identity_assessment_skipped_when_openai_not_configured(self):
+        original_key = settings.openai_api_key
+        settings.openai_api_key = ""
+        try:
+            with patch("app.background_worker.process_next_identity_assessment") as mock_process:
+                result = background_worker._process_next_identity_assessment_safely("w1")
+        finally:
+            settings.openai_api_key = original_key
+        mock_process.assert_not_called()
+        self.assertFalse(result)
+
+    def test_identity_assessment_processed_when_configured(self):
+        original_key = settings.openai_api_key
+        settings.openai_api_key = "test-key"
+        try:
+            with patch(
+                "app.background_worker.process_next_identity_assessment",
+                return_value={"processed": True, "shot_id": 1, "media_id": 2},
+            ) as mock_process:
+                result = background_worker._process_next_identity_assessment_safely("w1")
+        finally:
+            settings.openai_api_key = original_key
+        mock_process.assert_called_once_with(worker_id="w1")
+        self.assertTrue(result)
+
+    def test_identity_assessment_failure_is_swallowed(self):
+        original_key = settings.openai_api_key
+        settings.openai_api_key = "test-key"
+        try:
+            with patch(
+                "app.background_worker.process_next_identity_assessment",
+                side_effect=RuntimeError("provider down"),
+            ):
+                result = background_worker._process_next_identity_assessment_safely("w1")
+        finally:
+            settings.openai_api_key = original_key
+        self.assertFalse(result)
+
 
 if __name__ == "__main__":
     unittest.main()

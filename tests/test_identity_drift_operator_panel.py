@@ -50,6 +50,15 @@ process.stdout.write(JSON.stringify(result));
         self.assertIn("&lt;drift&gt;", html)
         self.assertNotIn("<drift>", html)
 
+    def test_video_media_type_shows_a_video_badge(self):
+        html = self.run_node(
+            "panel.renderIdentityDriftOperatorPanel({items:[{shot_id:5,media_type:'video',identity_drift:{"
+            "status:'passed',score:0.95,attempt:1}}]})"
+        )
+
+        self.assertIn("וידאו", html)
+        self.assertIn('data-media-type="video"', html)
+
     def test_empty_payload_has_stable_empty_state(self):
         html = self.run_node("panel.renderIdentityDriftOperatorPanel({items:[]})")
 
