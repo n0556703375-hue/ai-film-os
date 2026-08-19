@@ -18,6 +18,9 @@ button.danger{background:#642c37;color:#fff}
 .meta{color:#85a9bc;font-size:13px}.title{font-size:18px;font-weight:700;margin:8px 0}
 .stat{font-size:30px;color:#bceeff}
 .badge{display:inline-block;padding:4px 8px;background:#183748;border-radius:999px;font-size:12px}
+.badge-ok{background:#17452e;color:#b9f4d1}
+.badge-warn{background:#4a2416;color:#ffd0ac}
+.badge-neutral{background:#183748;color:#bceeff}
 .approved{background:#17452e;color:#b9f4d1}
 .row{display:flex;gap:8px;margin-top:10px}.row>*{flex:1}
 select,input,textarea{width:100%;background:#102431;color:white;border:1px solid #315267;border-radius:9px;padding:9px;font:inherit}

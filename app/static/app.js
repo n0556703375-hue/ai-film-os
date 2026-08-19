@@ -237,11 +237,45 @@ async function createShot() {
   await openShot(shot.id);
 }
 
+const IDENTITY_DRIFT_LABELS = {
+  pending: "ממתין לבדיקת AI",
+  running: "בבדיקת AI",
+  passed: "עברה בדיקת זהות",
+  blocked: "נחסם — סטיית זהות",
+  error: "שגיאה בבדיקת זהות",
+};
+
+let identityDriftConfiguredCache = null;
+async function isIdentityDriftConfigured() {
+  if (identityDriftConfiguredCache === null) {
+    try {
+      identityDriftConfiguredCache = (await api("/api/shots/identity-drift/status")).configured;
+    } catch {
+      identityDriftConfiguredCache = true; // don't nag the user over a transient fetch failure
+    }
+  }
+  return identityDriftConfiguredCache;
+}
+
+function identityDriftBadge(media, configured) {
+  const drift = media.metadata && media.metadata.identity_drift;
+  if (!drift || !drift.status) return "";
+  const label = IDENTITY_DRIFT_LABELS[drift.status] || drift.status;
+  const cls = drift.status === "blocked" || drift.status === "error" ? "badge-warn"
+    : drift.status === "passed" ? "badge-ok" : "badge-neutral";
+  let extra = "";
+  if (drift.status === "pending" && !configured) {
+    extra = ` <span class="badge badge-warn">ה-AI לא מוגדר (OPENAI_API_KEY) — הבדיקה תישאר ממתינה</span>`;
+  }
+  return ` <span class="badge ${cls}">${esc(label)}</span>${extra}`;
+}
+
 async function openShot(id) {
-  const [shot, assets, scenes] = await Promise.all([
+  const [shot, assets, scenes, identityDriftConfigured] = await Promise.all([
     api(`/api/shots/${id}`),
     api("/api/assets"),
-    api("/api/scenes")
+    api("/api/scenes"),
+    isIdentityDriftConfigured(),
   ]);
   const selected = new Set(shot.assets.map((a) => a.id));
   const shotTypes = ["רגיל","Establishing","Close-up","Medium","Wide","Insert","POV","Reaction","Transition"];
@@ -315,7 +349,7 @@ async function openShot(id) {
         </div>
         <div class="workspace-section" style="margin-top:15px">
           <div class="section-toolbar"><h3>תוצאות תמונה ווידאו</h3><button onclick="newMedia(${shot.id})">תוצאה חדשה</button></div>
-          ${shot.media_results.length ? shot.media_results.map((m)=>`<div class="history-item"><b>${m.media_type==="image"?"תמונה":"וידאו"} v${m.version}</b> · ${esc(m.provider || "ללא ספק")} · ${esc(m.status)}<br><a href="${esc(m.url)}" target="_blank" rel="noopener">פתיחת תוצאה</a></div>`).join("") : "<p>טרם נשמרו תוצאות.</p>"}
+          ${shot.media_results.length ? shot.media_results.map((m)=>`<div class="history-item"><b>${m.media_type==="image"?"תמונה":"וידאו"} v${m.version}</b> · ${esc(m.provider || "ללא ספק")} · ${esc(m.status)}${identityDriftBadge(m, identityDriftConfigured)}<br><a href="${esc(m.url)}" target="_blank" rel="noopener">פתיחת תוצאה</a></div>`).join("") : "<p>טרם נשמרו תוצאות.</p>"}
           <button class="secondary" onclick="newIssueForShot(${shot.id})">הוספת בדיקת רציפות</button>
         </div>
       </div>

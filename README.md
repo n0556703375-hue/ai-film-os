@@ -123,3 +123,13 @@ Kling מאמת עם זוג AccessKey/SecretKey שחותם JWT קצר־מועד (
 * **מקבילה לווידאו:** `app/services/video_identity_vision.py` מחלץ פריים מייצג מהווידאו שנוצר (`app/services/video_frame_extraction.py`, דרך ffmpeg מובנה ב-`imageio[ffmpeg]`, בלי תלות במערכת) וממיר אותו ל-`data:` URI — ואז מעביר אותו לאותה בדיקה בדיוק שהתמונות כבר עוברות (`evaluate_shot_identity`), ללא לוגיקת השוואה כפולה.
 * ה-API הקיים (`GET /api/shots/identity-drift/pending`, `.../completed`, `POST .../requeue-stale` וכו') משרת כעת גם תמונה וגם וידאו יחד — כל פריט כולל `media_type` להבחנה.
 * הרצה ידנית עדיין אפשרית דרך `scripts/process_identity_assessments.py` אם רוצים לעבד באופן חד-פעמי/מתוזמן מחוץ ל-thread הרקע.
+* **Thread נפרד לבדיקות AI:** בדיקות ה-Identity Drift רצות עכשיו על thread רקע ייעודי, נפרד מה-thread שמעבד את תור יצירת המדיה (`app/background_worker.py::_identity_worker_loop`) — עדיין באותו תהליך/שירות Render יחיד (לא נוסף שירות worker נפרד), אבל קריאת OpenAI Vision איטית או תקועה כבר לא יכולה לעכב יצירת תמונה/וידאו חדשים, ולהפך.
+* **נראות בממשק:** תג סטטוס ("ממתין לבדיקת AI" / "עברה בדיקת זהות" / "נחסם — סטיית זהות" וכו') מוצג ליד כל תוצאת מדיה בעמוד השוט הראשי (לא רק בפאנל התפעולי הנפרד), ואם הבדיקה תקועה "ממתינה" כי `OPENAI_API_KEY` לא מוגדר — מוצגת אזהרה מפורשת על כך (`GET /api/shots/identity-drift/status`).
+
+## בדיקת AI לרציפות חזותית (Visual Continuity) — הרחבה של בדיקת ה-Continuity
+
+בדיקת ה-Continuity הקיימת (`app/services/continuity.py`) היא כללית בלבד — משווה שמות דמויות/לוקיישנים/אביזרים בין שוטים סמוכים, בלי לנתח את התמונה בפועל. עכשיו יש גם שכבת AI אופציונלית שמשווה את הפריימים עצמם:
+
+* `app/services/visual_continuity_vision.py` שולח את התמונה/פריים האחרון של השוט הנוכחי ושל השוט השכן (הקודם/הבא) ל-OpenAI Vision, ומבקש ציון רציפות (0–1) ודגלים כמו `wardrobe_changed`, `lighting_changed`, `framing_mismatch`.
+* `app/services/shot_visual_continuity.py` מחבר את זה לנתונים אמיתיים — שולף את תוצאת המדיה האחרונה של כל שוט (ומחלץ פריים מווידאו במידת הצורך, באותו מנגנון של Identity Drift), וקורא לבדיקה. פועל Best-effort בלבד: מחזיר רשימה ריקה בלי לזרוק שגיאה אם אין `OPENAI_API_KEY`, אם לשוט אין עדיין מדיה, או אם קריאת ה-AI נכשלת.
+* `GET /api/issues/shots/{shot_id}/continuity-preview` כולל כעת גם את הבעיות מבדיקת ה-AI (ניתן לכבות עם `?include_ai=false`), יחד עם בעיות הבדיקה הכללית הקיימת — אותו endpoint, אותה צורת תשובה.
