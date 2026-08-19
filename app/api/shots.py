@@ -1,11 +1,13 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from app.models.schemas import AssetLinkRequest, MediaResultCreate, ShotCreate, ShotUpdate
+from app.repositories import assets as assets_repo
 from app.repositories import shots as repo
 from app.repositories import issues as issue_repo
 from app.services.prompt_builder import build_prompt
 from app.services.continuity import check_shot_continuity
 from app.services.director import run_director
 from app.services.media_upload import MediaUploadError, validate_and_store_upload
+from app.services.shot_asset_autofill import suggest_shot_asset_ids
 
 router = APIRouter(prefix="/api/shots", tags=["shots"])
 
@@ -52,6 +54,24 @@ def link_assets(shot_id: int, request: AssetLinkRequest):
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return repo.get_shot(shot_id)
+
+@router.post("/{shot_id}/assets/autofill")
+def autofill_assets(shot_id: int):
+    """Suggest and link characters/locations/props/wardrobe whose name
+    appears in the shot's own text fields (action, dialogue, camera notes,
+    prompt, ...) — additive only, never removes an asset a human already
+    linked manually."""
+    shot = repo.get_shot(shot_id)
+    if not shot:
+        raise HTTPException(404, "השוט לא נמצא.")
+    project_assets = assets_repo.list_assets(shot["project_id"])
+    suggested_ids = suggest_shot_asset_ids(shot, project_assets)
+    existing_ids = {asset["id"] for asset in shot["assets"]}
+    combined_ids = sorted(existing_ids | set(suggested_ids))
+    if combined_ids != sorted(existing_ids):
+        repo.set_shot_assets(shot_id, combined_ids)
+    added_ids = sorted(set(suggested_ids) - existing_ids)
+    return {**repo.get_shot(shot_id), "added_asset_ids": added_ids}
 
 @router.post("/{shot_id}/prompt")
 def generate_prompt(shot_id: int):

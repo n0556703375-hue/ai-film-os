@@ -341,7 +341,10 @@ async function openShot(id) {
                 <span>${esc(a.asset_type)} — ${esc(a.name)} ${a.approved?"✓":""}</span>
               </label>`).join("")}
           </div>
-          <button onclick="saveShotAssets(${shot.id})">שמירת שיוך נכסים</button>
+          <div class="row">
+            <button onclick="saveShotAssets(${shot.id})">שמירת שיוך נכסים</button>
+            <button class="secondary" onclick="autofillShotAssets(${shot.id})">מילוי אוטומטי לפי הטקסט</button>
+          </div>
         </div>
         <div class="workspace-section" style="margin-top:15px">
           <div class="section-toolbar"><h3>גרסאות פרומפט</h3><button onclick="makePrompt(${shot.id})">בניית פרומפט</button></div>
@@ -431,6 +434,14 @@ async function saveShotAssets(id) {
   const asset_ids = [...document.querySelectorAll(".wsAsset:checked")].map((x)=>Number(x.value));
   await api(`/api/shots/${id}/assets`, {method:"PUT", body:JSON.stringify({asset_ids})});
   alert("שיוך הנכסים נשמר.");
+  await openShot(id);
+}
+
+async function autofillShotAssets(id) {
+  const data = await api(`/api/shots/${id}/assets/autofill`, {method:"POST"});
+  alert(data.added_asset_ids.length
+    ? `נוספו ${data.added_asset_ids.length} נכסים לפי הטקסט של השוט.`
+    : "לא נמצאו נכסים נוספים לפי הטקסט של השוט.");
   await openShot(id);
 }
 
