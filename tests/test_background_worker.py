@@ -57,10 +57,13 @@ class BackgroundWorkerStatusTests(unittest.TestCase):
 
         # Reset module-level state between tests since it's a singleton.
         background_worker._worker_thread = None
+        background_worker._identity_worker_thread = None
         background_worker._last_job_timestamp = None
         background_worker._last_job_shot_id = None
         background_worker._jobs_processed_count = 0
+        background_worker._identity_assessments_processed_count = 0
         background_worker._stop_event.clear()
+        background_worker._identity_stop_event.clear()
 
     def tearDown(self):
         background_worker.stop()
@@ -100,17 +103,37 @@ class BackgroundWorkerStatusTests(unittest.TestCase):
         self.assertTrue(background_worker.is_alive())
         self.assertTrue(background_worker._worker_thread.daemon)
 
+    def test_start_launches_a_separate_identity_worker_thread(self):
+        background_worker.start()
+        self.assertTrue(background_worker.is_identity_worker_alive())
+        self.assertTrue(background_worker._identity_worker_thread.daemon)
+        self.assertIsNot(background_worker._identity_worker_thread, background_worker._worker_thread)
+
     def test_start_is_idempotent_when_already_running(self):
         background_worker.start()
         first_thread = background_worker._worker_thread
+        first_identity_thread = background_worker._identity_worker_thread
         background_worker.start()
         self.assertIs(background_worker._worker_thread, first_thread)
+        self.assertIs(background_worker._identity_worker_thread, first_identity_thread)
 
     def test_stop_terminates_thread(self):
         background_worker.start()
         self.assertTrue(background_worker.is_alive())
         background_worker.stop()
         self.assertFalse(background_worker.is_alive())
+
+    def test_stop_terminates_identity_worker_thread(self):
+        background_worker.start()
+        self.assertTrue(background_worker.is_identity_worker_alive())
+        background_worker.stop()
+        self.assertFalse(background_worker.is_identity_worker_alive())
+
+    def test_get_status_reports_identity_worker_fields(self):
+        status = background_worker.get_status()
+        self.assertIn("identity_worker_alive", status)
+        self.assertIn("identity_assessments_processed", status)
+        self.assertFalse(status["identity_worker_alive"])
 
     def test_identity_assessment_skipped_when_openai_not_configured(self):
         original_key = settings.openai_api_key

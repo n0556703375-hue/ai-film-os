@@ -6,6 +6,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.core.config import settings
 from app.database.connection import get_connection
 from app.services.identity_drift import (
     DEFAULT_MIN_IDENTITY_SIMILARITY,
@@ -136,6 +137,15 @@ def _store_identity_drift(
     result = dict(updated)
     result["metadata"] = json.loads(result["metadata_json"] or "{}")
     return {"shot_id": shot_id, "media": result}
+
+
+@router.get("/identity-drift/status")
+def identity_drift_status():
+    """Lets the UI tell "still queued, will run shortly" apart from "queued
+    forever because OPENAI_API_KEY was never set" — see
+    app/background_worker.py::_process_next_identity_assessment_safely,
+    which silently skips processing whenever this is False."""
+    return {"configured": bool(settings.openai_api_key)}
 
 
 @router.get("/identity-drift/pending")
