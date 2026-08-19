@@ -10,6 +10,7 @@ from app.api.identity_assessments import (
 )
 from app.repositories import shots as shot_repo
 from app.services.identity_vision import IdentityVisionAdapter, evaluate_shot_identity
+from app.services.video_identity_vision import evaluate_shot_video_identity
 
 
 def process_identity_assessment(
@@ -36,11 +37,18 @@ def process_identity_assessment(
         if not shot:
             raise ValueError("The claimed shot no longer exists.")
 
-        verdict = evaluate_shot_identity(
-            shot=shot,
-            candidate_url=claimed["url"],
-            adapter=adapter,
-        )
+        if claimed.get("media_type") == "video":
+            verdict = evaluate_shot_video_identity(
+                shot=shot,
+                candidate_video_url=claimed["url"],
+                adapter=adapter,
+            )
+        else:
+            verdict = evaluate_shot_identity(
+                shot=shot,
+                candidate_url=claimed["url"],
+                adapter=adapter,
+            )
         request = IdentityDriftAssessmentRequest(
             worker_id=worker_id,
             status=verdict["status"],

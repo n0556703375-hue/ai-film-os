@@ -15,6 +15,7 @@ class IdentityDriftCompletedApiTests(unittest.TestCase):
             {
                 "id": 12,
                 "shot_id": 8,
+                "media_type": "image",
                 "url": "https://example.invalid/frame-12.png",
                 "metadata_json": json.dumps({
                     "identity_drift": {
@@ -31,6 +32,7 @@ class IdentityDriftCompletedApiTests(unittest.TestCase):
             {
                 "id": 11,
                 "shot_id": 7,
+                "media_type": "image",
                 "url": "https://example.invalid/frame-11.png",
                 "metadata_json": json.dumps({
                     "identity_drift": {"status": "running"}
@@ -39,6 +41,7 @@ class IdentityDriftCompletedApiTests(unittest.TestCase):
             {
                 "id": 10,
                 "shot_id": 6,
+                "media_type": "image",
                 "url": "https://example.invalid/frame-10.png",
                 "metadata_json": "not-json",
             },
@@ -55,7 +58,7 @@ class IdentityDriftCompletedApiTests(unittest.TestCase):
         self.assertNotIn("evidence", summary)
         self.assertNotIn("raw_provider_payload", summary)
         sql = connection.execute.call_args.args[0]
-        self.assertIn("WHERE media_results.media_type='image'", sql)
+        self.assertIn("WHERE media_results.media_type IN ('image', 'video')", sql)
         self.assertIn("ORDER BY media_results.id DESC", sql)
         connection.close.assert_called_once_with()
 
@@ -68,6 +71,7 @@ class IdentityDriftCompletedApiTests(unittest.TestCase):
             {
                 "id": 3,
                 "shot_id": 3,
+                "media_type": "image",
                 "url": "https://example.invalid/3.png",
                 "metadata_json": json.dumps({
                     "identity_drift": {"status": "running"}
@@ -76,6 +80,7 @@ class IdentityDriftCompletedApiTests(unittest.TestCase):
             {
                 "id": 2,
                 "shot_id": 2,
+                "media_type": "image",
                 "url": "https://example.invalid/2.png",
                 "metadata_json": json.dumps({
                     "identity_drift": {"status": "blocked", "passed": False}
@@ -84,6 +89,7 @@ class IdentityDriftCompletedApiTests(unittest.TestCase):
             {
                 "id": 1,
                 "shot_id": 1,
+                "media_type": "image",
                 "url": "https://example.invalid/1.png",
                 "metadata_json": json.dumps({
                     "identity_drift": {"status": "error", "passed": False}

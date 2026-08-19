@@ -21,6 +21,13 @@ from app.services.identity_drift_worker import (
 
 router = APIRouter(prefix="/api/shots", tags=["identity-assessments"])
 
+# Both media types share one identity-drift queue/lifecycle — same
+# metadata_json["identity_drift"] shape, same claim/evaluate/record
+# endpoints. Only which frame the vision adapter is shown differs (see
+# app/services/identity_worker.py, which extracts a frame from video before
+# comparing — everything else here is media_type-agnostic.
+_IDENTITY_DRIFT_MEDIA_TYPES = {"image", "video"}
+
 
 class IdentityDriftAssessmentRequest(BaseModel):
     worker_id: str = Field(min_length=1, max_length=200)
@@ -95,8 +102,8 @@ def _store_identity_drift(
         ).fetchone()
         if not media:
             raise HTTPException(404, "תוצאת המדיה לא נמצאה בשוט.")
-        if media["media_type"] != "image":
-            raise HTTPException(409, "בדיקת Identity Drift זמינה לתמונות בלבד.")
+        if media["media_type"] not in _IDENTITY_DRIFT_MEDIA_TYPES:
+            raise HTTPException(409, "בדיקת Identity Drift זמינה לתמונות ולווידאו בלבד.")
 
         try:
             metadata = json.loads(media["metadata_json"] or "{}")
@@ -146,11 +153,11 @@ def list_pending_identity_drift(
 
         rows = conn.execute(
             """
-            SELECT media_results.id, media_results.shot_id,
+            SELECT media_results.id, media_results.shot_id, media_results.media_type,
                    media_results.url, media_results.metadata_json
             FROM media_results
             JOIN shots ON shots.id = media_results.shot_id
-            WHERE media_results.media_type='image'
+            WHERE media_results.media_type IN ('image', 'video')
               AND shots.project_id=?
             ORDER BY media_results.id ASC
             """,
@@ -169,6 +176,7 @@ def list_pending_identity_drift(
         pending.append({
             "media_id": row["id"],
             "shot_id": row["shot_id"],
+            "media_type": row["media_type"],
             "url": row["url"],
             "identity_drift": assessment,
         })
@@ -183,7 +191,7 @@ def list_completed_identity_drift(
     project_id: int = Query(ge=1),
     limit: int = Query(default=50, ge=1, le=200),
 ):
-    """Return operator-safe summaries for one project's completed image assessments."""
+    """Return operator-safe summaries for one project's completed image/video assessments."""
     with closing(get_connection()) as conn:
         project = conn.execute(
             "SELECT id FROM projects WHERE id=?",
@@ -194,11 +202,11 @@ def list_completed_identity_drift(
 
         rows = conn.execute(
             """
-            SELECT media_results.id, media_results.shot_id,
+            SELECT media_results.id, media_results.shot_id, media_results.media_type,
                    media_results.url, media_results.metadata_json
             FROM media_results
             JOIN shots ON shots.id = media_results.shot_id
-            WHERE media_results.media_type='image'
+            WHERE media_results.media_type IN ('image', 'video')
               AND shots.project_id=?
             ORDER BY media_results.id DESC
             """,
@@ -217,6 +225,7 @@ def list_completed_identity_drift(
         completed.append({
             "media_id": row["id"],
             "shot_id": row["shot_id"],
+            "media_type": row["media_type"],
             "url": row["url"],
             "identity_drift": summary,
         })
@@ -251,7 +260,7 @@ def requeue_stale_identity_drift(
                    media_results.metadata_json
             FROM media_results
             JOIN shots ON shots.id = media_results.shot_id
-            WHERE media_results.media_type='image'
+            WHERE media_results.media_type IN ('image', 'video')
               AND shots.project_id=?
             ORDER BY media_results.id ASC
             """,
@@ -314,8 +323,8 @@ def claim_identity_drift(
         ).fetchone()
         if not media:
             raise HTTPException(404, "תוצאת המדיה לא נמצאה בשוט.")
-        if media["media_type"] != "image":
-            raise HTTPException(409, "בדיקת Identity Drift זמינה לתמונות בלבד.")
+        if media["media_type"] not in _IDENTITY_DRIFT_MEDIA_TYPES:
+            raise HTTPException(409, "בדיקת Identity Drift זמינה לתמונות ולווידאו בלבד.")
 
         try:
             metadata = json.loads(media["metadata_json"] or "{}")
@@ -343,6 +352,7 @@ def claim_identity_drift(
     return {
         "media_id": media_id,
         "shot_id": shot_id,
+        "media_type": media["media_type"],
         "url": media["url"],
         "identity_drift": claimed,
     }

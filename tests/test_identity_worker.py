@@ -85,6 +85,40 @@ class IdentityWorkerTests(unittest.TestCase):
         self.assertFalse(request.passed)
         self.assertIn("RuntimeError", request.reasons[0])
 
+    @patch("app.services.identity_worker.record_identity_drift")
+    @patch("app.services.identity_worker.evaluate_shot_video_identity")
+    @patch("app.services.identity_worker.evaluate_shot_identity")
+    @patch("app.services.identity_worker.shot_repo.get_shot")
+    @patch("app.services.identity_worker.claim_identity_drift")
+    def test_video_media_type_uses_video_evaluator(
+        self,
+        claim,
+        get_shot,
+        evaluate_image,
+        evaluate_video,
+        record,
+    ):
+        claim.return_value = {
+            "shot_id": 7,
+            "media_id": 11,
+            "media_type": "video",
+            "url": "https://example.com/candidate.mp4",
+        }
+        get_shot.return_value = {"id": 7, "assets": []}
+        evaluate_video.return_value = {
+            "status": "passed", "passed": True, "identity_similarity": 0.9,
+            "reasons": [], "provider": "vision-provider", "model": "identity-v1",
+        }
+        record.return_value = {
+            "media": {"metadata": {"identity_drift": {"status": "passed", "passed": True}}}
+        }
+
+        process_identity_assessment(shot_id=7, media_id=11, worker_id="worker-1", adapter=Mock())
+
+        evaluate_video.assert_called_once()
+        evaluate_image.assert_not_called()
+        self.assertEqual(evaluate_video.call_args.kwargs["candidate_video_url"], "https://example.com/candidate.mp4")
+
     @patch("app.services.identity_worker.claim_identity_drift")
     def test_does_not_evaluate_when_claim_fails(self, claim):
         claim.side_effect = RuntimeError("already claimed")
