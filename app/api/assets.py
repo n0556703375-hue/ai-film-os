@@ -9,7 +9,7 @@ from app.services.reference_gallery import group_approved_references
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 
-_BIBLE_AUTOFILL_ASSET_TYPES = {"דמות", "לוקיישן"}
+_BIBLE_AUTOFILL_ASSET_TYPES = {"דמות", "לוקיישן", "אביזר", "לבוש"}
 
 @router.get("")
 def list_assets(project_id: int | None = None):
@@ -76,9 +76,10 @@ def update_asset(asset_id: int, update: AssetUpdate):
 
 @router.post(
     "/{asset_id}/generate-bible",
-    summary="Fill in a character/location asset's Story Bible fields (description, visual rules, prompts) using AI",
+    summary="Fill in an asset's Story Bible fields (description, visual rules, prompts) using AI",
     description=(
-        "Available for asset_type דמות (character) and לוקיישן (location) only. "
+        "Available for asset_type דמות (character), לוקיישן (location), אביזר (prop) "
+        "and לבוש (wardrobe) only. "
         "Overwrites description/visual_rules/master_prompt/negative_prompt — the "
         "caller is expected to warn the user before calling this on an asset that "
         "already has content filled in. Refused (409) on a locked asset, matching "
@@ -90,7 +91,7 @@ def generate_bible(asset_id: int):
     if not asset:
         raise HTTPException(404, "הנכס לא נמצא.")
     if asset["asset_type"] not in _BIBLE_AUTOFILL_ASSET_TYPES:
-        raise HTTPException(409, "מילוי אוטומטי עם AI זמין לדמויות ולוקיישנים בלבד.")
+        raise HTTPException(409, "מילוי אוטומטי עם AI זמין לדמויות, לוקיישנים, אביזרים ולבוש בלבד.")
     project = project_repo.get_project(asset["project_id"])
     try:
         fields = generate_asset_bible(asset, project)

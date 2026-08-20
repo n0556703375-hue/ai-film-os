@@ -9,7 +9,7 @@ async function openAsset(id) {
   const lockLabel = LOCK_LABELS[asset.lock_status] || asset.lock_status || "טיוטה";
   const references = asset.reference_images || [];
   const lockTitle = isCharacter ? "Character Lock" : asset.asset_type === "לוקיישן" ? "Location Lock" : "Wardrobe Lock";
-  const bibleAutofillAvailable = isCharacter || asset.asset_type === "לוקיישן";
+  const bibleAutofillAvailable = ["דמות", "לוקיישן", "אביזר", "לבוש"].includes(asset.asset_type);
   const hasBibleContent = Boolean(asset.description || asset.visual_rules || asset.master_prompt || asset.negative_prompt);
 
   show(`<div class="meta">${esc(asset.asset_type)} · גרסה ${asset.version}</div>

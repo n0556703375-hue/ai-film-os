@@ -8,6 +8,8 @@ _BIBLE_TEXT_FIELDS = ("description", "visual_rules", "master_prompt", "negative_
 _ASSET_TYPE_LABELS = {
     "דמות": "a character",
     "לוקיישן": "a filming location",
+    "אביזר": "a prop",
+    "לבוש": "a wardrobe/costume piece",
 }
 
 
